@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AI assistant workspace (local memory, plugin state)
+.ai/
