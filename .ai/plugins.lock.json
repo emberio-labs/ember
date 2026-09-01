@@ -1,0 +1,8 @@
+{
+  "plugins": {
+    "core_agents": "1.1.0",
+    "git": "1.0.0",
+    "github": "1.0.0",
+    "godot": "1.1.0"
+  }
+}

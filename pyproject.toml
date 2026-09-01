@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "ember"
+version = "0.1.0"
+description = "Библиотека для простой интеграции с LLM-провайдерами и создания собственных агентов"
+authors = ["Ember Labs <dev@emberio.labs>"]
+readme = "README.md"
+packages = [{ include = "ember" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.9"
+mypy = "^1.10"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["ember"]
+strict = true
