@@ -1,0 +1,112 @@
+"""Модели данных ядра ember — общий язык для всех провайдеров.
+
+Эти типы не зависят от конкретных SDK: каждый адаптер (OpenAI, Anthropic,
+Gemini, локальные модели) конвертирует свой формат в модели ядра и обратно.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal, get_args
+
+Role = Literal["system", "user", "assistant", "tool"]
+"""Допустимые роли участников диалога."""
+
+_VALID_ROLES: tuple[str, ...] = get_args(Role)
+
+
+@dataclass(slots=True)
+class Message:
+    """Одно сообщение в диалоге.
+
+    Attributes:
+        role: Роль отправителя: system, user, assistant или tool.
+        content: Текст сообщения.
+        name: Опциональное имя участника — позволяет модели различать
+            нескольких участников с одной ролью (например, нескольких
+            пользователей или ассистентов в одном диалоге).
+    """
+
+    role: Role
+    content: str
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.role not in _VALID_ROLES:
+            raise ValueError(
+                f"Недопустимая роль: {self.role!r}. "
+                f"Ожидается одна из: {', '.join(_VALID_ROLES)}"
+            )
+
+
+@dataclass(slots=True)
+class Usage:
+    """Счётчики токенов за один запрос.
+
+    Attributes:
+        prompt_tokens: Токенов потрачено на вход (промпт).
+        completion_tokens: Токенов потрачено на ответ.
+        total_tokens: Суммарное количество токенов.
+    """
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+@dataclass(slots=True)
+class ChatRequest:
+    """Запрос к LLM-провайдеру.
+
+    Attributes:
+        messages: История диалога. Не может быть пустой.
+        model: Имя модели у провайдера (например, "gpt-4o-mini").
+        temperature: Креативность ответа, от 0.0 (детерминированно) и выше.
+        max_tokens: Максимум токенов в ответе. None — ограничение провайдера.
+        stream: Использовать ли потоковый режим ответа.
+    """
+
+    messages: list[Message]
+    model: str
+    temperature: float = 1.0
+    max_tokens: int | None = None
+    stream: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.messages:
+            raise ValueError("Список сообщений не может быть пустым")
+        if self.temperature < 0:
+            raise ValueError("temperature не может быть отрицательной")
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            raise ValueError("max_tokens должен быть положительным числом")
+
+
+@dataclass(slots=True)
+class ChatResponse:
+    """Ответ модели на ChatRequest.
+
+    Attributes:
+        message: Сообщение с ответом модели (роль assistant).
+        model: Модель, которая сформировала ответ.
+        usage: Счётчики токенов, если провайдер их вернул.
+    """
+
+    message: Message
+    model: str
+    usage: Usage | None = None
+
+
+@dataclass(slots=True)
+class StreamChunk:
+    """Фрагмент потокового ответа модели.
+
+    Attributes:
+        delta: Часть текста ответа, пришедшая в этом фрагменте.
+        model: Модель, из которой пришёл фрагмент.
+        finish_reason: Причина завершения ("stop", "length", ...) для
+            последнего фрагмента, иначе None.
+    """
+
+    delta: str
+    model: str
+    finish_reason: str | None = None
