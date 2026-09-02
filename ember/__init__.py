@@ -1,6 +1,6 @@
 """ember — библиотека для простой интеграции с LLM-провайдерами и создания агентов."""
 
-from ember.agent import Agent
+from ember.agent import Agent, ToolCallLimitError
 from ember.providers import (
     MockProvider,
     OpenAIProvider,
@@ -12,6 +12,7 @@ from ember.providers import (
 from ember.types import (
     ChatRequest,
     ChatResponse,
+    FunctionTool,
     Message,
     StreamChunk,
     Tool,
@@ -26,6 +27,7 @@ __all__ = [
     "Agent",
     "ChatRequest",
     "ChatResponse",
+    "FunctionTool",
     "Message",
     "MockProvider",
     "OpenAIProvider",
@@ -34,6 +36,7 @@ __all__ = [
     "StreamChunk",
     "Tool",
     "ToolCall",
+    "ToolCallLimitError",
     "Usage",
     "get_provider",
     "register_provider",

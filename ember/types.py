@@ -6,6 +6,7 @@ Gemini, локальные модели) конвертирует свой фо�
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -84,6 +85,26 @@ class Tool:
             raise ValueError("Имя инструмента не может быть пустым")
 
 
+@dataclass(slots=True, kw_only=True)
+class FunctionTool(Tool):
+    """Инструмент для агента: описание для модели + локальная функция.
+
+    Единый источник истины для tool calling: поля ``Tool`` (name,
+    description, parameters) уходят модели в ``ChatRequest.tools``, а
+    ``func`` агент вызывает с аргументами из ``ToolCall.arguments`` модели.
+    Связка схемы и реализации в одном объекте исключает их рассинхрон.
+
+    Поля keyword-only (включая унаследованные) — инструмент всегда
+    собирается по именам полей, позиционные аргументы не поддерживаются.
+
+    Attributes:
+        func: Python-функция, исполняющая инструмент. Вызывается агентом с
+            keyword-аргументами, распарсенными из JSON-объекта arguments.
+    """
+
+    func: Callable[..., Any]
+
+
 @dataclass(slots=True)
 class Usage:
     """Счётчики токенов за один запрос.
@@ -109,7 +130,9 @@ class ChatRequest:
         temperature: Креативность ответа, от 0.0 (детерминированно) и выше.
         max_tokens: Максимум токенов в ответе. None — ограничение провайдера.
         stream: Использовать ли потоковый режим ответа.
-        tools: Описания функций, которые модель может вызвать.
+        tools: Описания функций, которые модель может вызвать. Тип Sequence,
+            чтобы можно было передавать список подтипов Tool (например,
+            FunctionTool) без конвертации.
     """
 
     messages: list[Message]
@@ -117,7 +140,7 @@ class ChatRequest:
     temperature: float = 1.0
     max_tokens: int | None = None
     stream: bool = False
-    tools: list[Tool] | None = None
+    tools: Sequence[Tool] | None = None
 
     def __post_init__(self) -> None:
         if not self.messages:
