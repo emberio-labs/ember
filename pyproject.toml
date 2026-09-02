@@ -8,11 +8,16 @@ packages = [{ include = "ember" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+openai = { version = "^3.0", optional = true }
+
+[tool.poetry.extras]
+openai = ["openai"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 ruff = "^0.9"
 mypy = "^1.10"
+openai = "^3.0"
 
 [build-system]
 requires = ["poetry-core"]

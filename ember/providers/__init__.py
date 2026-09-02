@@ -5,12 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ember.providers.base import Provider
+from ember.providers.base import Provider, ProviderError
 from ember.providers.mock import MockProvider
+from ember.providers.openai import OpenAIProvider
 
-__all__ = ["MockProvider", "Provider", "get_provider", "register_provider"]
+__all__ = [
+    "MockProvider",
+    "OpenAIProvider",
+    "Provider",
+    "ProviderError",
+    "get_provider",
+    "register_provider",
+]
 
-_REGISTRY: dict[str, type[Provider]] = {"mock": MockProvider}
+_REGISTRY: dict[str, type[Provider]] = {
+    "mock": MockProvider,
+    "openai": OpenAIProvider,
+}
 
 
 def register_provider(name: str) -> Callable[[type[Provider]], type[Provider]]:
