@@ -2,6 +2,7 @@
 name = "ember"
 version = "0.1.0"
 description = "Библиотека для простой интеграции с LLM-провайдерами и создания собственных агентов"
+license = "MIT"
 authors = ["Ember Labs <dev@emberio.labs>"]
 readme = "README.md"
 packages = [{ include = "ember" }]
