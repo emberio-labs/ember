@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from ember.providers.base import Provider, ProviderError
-from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Usage
+from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Tool, ToolCall, Usage
 
 if TYPE_CHECKING:
     from openai import OpenAI, OpenAIError
@@ -60,7 +60,9 @@ class OpenAIProvider(Provider):
             request: Запрос к модели.
 
         Returns:
-            Ответ модели с текстом, моделью и счётчиками токенов.
+            Ответ модели с текстом, моделью и счётчиками токенов. Если модель
+            решила вызвать инструменты, в ``message.tool_calls`` будет список
+            запрошенных вызовов.
 
         Raises:
             ProviderError: Если OpenAI API вернул ошибку.
@@ -76,10 +78,10 @@ class OpenAIProvider(Provider):
             raise ProviderError("OpenAI вернул пустой список choices")
 
         choice = completion.choices[0]
-        content = choice.message.content or ""
+        message = self._message_from_choice(choice)
         usage = completion.usage
         return ChatResponse(
-            message=Message(role="assistant", content=content),
+            message=message,
             model=completion.model,
             usage=(
                 Usage(
@@ -94,6 +96,9 @@ class OpenAIProvider(Provider):
 
     def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
         """Получить ответ модели потоком — по одному фрагменту за раз.
+
+        Потоковый режим агрегирует только текст ответа; вызовы инструментов
+        (tool calls) в потоке не разбираются — используйте ``complete``.
 
         Args:
             request: Запрос к модели.
@@ -130,6 +135,8 @@ class OpenAIProvider(Provider):
         }
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens
+        if request.tools:
+            params["tools"] = [self._to_openai_tool(tool) for tool in request.tools]
         return params
 
     @staticmethod
@@ -138,6 +145,46 @@ class OpenAIProvider(Provider):
         params: dict[str, Any] = {"role": message.role, "content": message.content}
         if message.name is not None:
             params["name"] = message.name
+        if message.tool_calls:
+            params["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
+        if message.tool_call_id is not None:
+            params["tool_call_id"] = message.tool_call_id
         # cast: ChatCompletionMessageParam — union TypedDict'ов с Literal-ролями,
         # а role в ядре — произвольный str, поэтому mypy не может выбрать вариант.
         return cast("ChatCompletionMessageParam", params)
+
+    @staticmethod
+    def _to_openai_tool(tool: Tool) -> dict[str, Any]:
+        """Сконвертировать Tool ядра в параметр tools OpenAI."""
+        function: dict[str, Any] = {"name": tool.name}
+        if tool.description:
+            function["description"] = tool.description
+        if tool.parameters is not None:
+            function["parameters"] = tool.parameters
+        return {"type": "function", "function": function}
+
+    @staticmethod
+    def _message_from_choice(choice: Any) -> Message:
+        """Собрать Message ядра из choice ответа OpenAI (complete)."""
+        content = choice.message.content or ""
+        message = Message(role="assistant", content=content)
+        if choice.message.tool_calls:
+            message.tool_calls = [
+                ToolCall(
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    arguments=tool_call.function.arguments or "{}",
+                )
+                for tool_call in choice.message.tool_calls
+            ]
+        return message

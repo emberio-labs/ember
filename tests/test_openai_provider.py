@@ -6,7 +6,7 @@ import openai
 import pytest
 
 from ember.providers import OpenAIProvider, ProviderError, get_provider
-from ember.types import ChatRequest, ChatResponse, Message, Usage
+from ember.types import ChatRequest, ChatResponse, Message, Tool, ToolCall, Usage
 
 
 class FakeCompletions:
@@ -60,10 +60,26 @@ def _request(**overrides: object) -> ChatRequest:
     return ChatRequest(**params)
 
 
-def _choice(content: str = "Hello", finish_reason: str = "stop") -> SimpleNamespace:
+def _choice(
+    content: str = "Hello",
+    finish_reason: str = "stop",
+    tool_calls: list[SimpleNamespace] | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
-        message=SimpleNamespace(role="assistant", content=content),
+        message=SimpleNamespace(role="assistant", content=content, tool_calls=tool_calls),
         finish_reason=finish_reason,
+    )
+
+
+def _tool_call(
+    id: str = "call_1",
+    name: str = "get_weather",
+    arguments: str = '{"city": "Moscow"}',
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=id,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=arguments),
     )
 
 
@@ -72,8 +88,10 @@ def _completion(
     content: str = "Hello",
     model: str = "gpt-4o-mini",
     usage: SimpleNamespace | None = None,
+    tool_calls: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(choices=[_choice(content)], model=model, usage=usage)
+    choice = _choice(content, tool_calls=tool_calls)
+    return SimpleNamespace(choices=[choice], model=model, usage=usage)
 
 
 def _usage(prompt: int = 10, completion: int = 5) -> SimpleNamespace:
@@ -237,6 +255,101 @@ def test_openai_error_wrapped(fake_client: FakeClient) -> None:
 
     with pytest.raises(ProviderError, match="invalid api key"):
         provider.complete(_request())
+
+
+def test_openai_complete_sends_tools(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(_completion())
+
+    parameters = {"type": "object", "properties": {"city": {"type": "string"}}}
+    request = _request(
+        tools=[
+            Tool(
+                name="get_weather",
+                description="Погода в городе",
+                parameters=parameters,
+            )
+        ]
+    )
+    provider.complete(request)
+
+    assert fake_client.chat.completions.calls[-1]["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Погода в городе",
+                "parameters": parameters,
+            },
+        }
+    ]
+
+
+def test_openai_complete_without_tools_omits_key(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(_completion())
+
+    provider.complete(_request())
+
+    assert "tools" not in fake_client.chat.completions.calls[-1]
+
+
+def test_openai_complete_parses_tool_calls(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        _completion(
+            content=None,
+            tool_calls=[
+                _tool_call(id="call_1", name="get_weather", arguments='{"city": "Moscow"}'),
+                _tool_call(id="call_2", name="get_time", arguments="{}"),
+            ],
+        )
+    )
+
+    response = provider.complete(_request())
+
+    assert response.message.content == ""
+    assert response.message.tool_calls == [
+        ToolCall(id="call_1", name="get_weather", arguments='{"city": "Moscow"}'),
+        ToolCall(id="call_2", name="get_time", arguments="{}"),
+    ]
+
+
+def test_openai_history_with_tool_calls_and_results(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(_completion())
+
+    request = ChatRequest(
+        messages=[
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(id="call_1", name="get_weather", arguments='{"city": "Moscow"}')
+                ],
+            ),
+            Message(role="tool", content="+15C", tool_call_id="call_1"),
+            Message(role="user", content="Спасибо"),
+        ],
+        model="gpt-4o-mini",
+    )
+    provider.complete(request)
+
+    assert fake_client.chat.completions.calls[-1]["messages"] == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Moscow"}'},
+                }
+            ],
+        },
+        {"role": "tool", "content": "+15C", "tool_call_id": "call_1"},
+        {"role": "user", "content": "Спасибо"},
+    ]
 
 
 def test_registry_get_openai(fake_client: FakeClient) -> None:
