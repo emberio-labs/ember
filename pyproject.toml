@@ -7,6 +7,10 @@ authors = ["Ember Labs <dev@emberio.labs>"]
 readme = "README.md"
 packages = [{ include = "ember" }]
 
+[tool.poetry.urls]
+Homepage = "https://github.com/emberio-labs/ember"
+Repository = "https://github.com/emberio-labs/ember"
+
 [tool.poetry.dependencies]
 python = "^3.10"
 openai = { version = "^3.0", optional = true }
