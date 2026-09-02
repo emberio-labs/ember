@@ -1,3 +1,78 @@
+# ember
+
+Библиотека для простой интеграции с LLM-провайдерами и создания собственных агентов.
+Предоставляет простой и единообразный интерфейс для работы с языковыми моделями,
+чтобы вы могли сосредоточиться на логике своих агентов, а не на деталях API.
+
+## Возможности
+
+- Единый интерфейс для различных LLM-провайдеров
+- Простой способ создавать и конфигурировать собственных агентов
+- Инструменты/функции для модели (tool calling)
+- Минимальное количество кода для старта
+
+> ⚠️ Проект на ранней стадии разработки. API активно меняется.
+
+## Установка
+
+Проект управляется через [Poetry](https://python-poetry.org/).
+
+```bash
+poetry install
+```
+
+Для работы с OpenAI дополнительно нужен пакет `openai` (устанавливается
+вместе с extra `ember[openai]`):
+
+```bash
+pip install "ember[openai]"
+```
+
+## Быстрый старт
+
+### Без ключей: `MockProvider`
+
+Работает без сети и API-ключей — удобно для экспериментов:
+
+```python
+from ember import Agent, MockProvider
+
+agent = Agent(provider=MockProvider(response_text="Привет! Я мок-провайдер."))
+print(agent.run("Привет!"))
+# Привет! Я мок-провайдер.
+```
+
+### С OpenAI: `OpenAIProvider`
+
+API-ключ передаётся явно (провайдер сам не читает окружение):
+
+```python
+import os
+
+from ember import Agent, OpenAIProvider
+
+agent = Agent(
+    provider=OpenAIProvider(api_key=os.environ["OPENAI_API_KEY"]),
+    model="gpt-4o-mini",
+)
+print(agent.run("Расскажи о себе в одном предложении."))
+```
+
+Полный исполняемый пример — в [`examples/quickstart.py`](examples/quickstart.py).
+
+### История диалога
+
+`Agent` сам накапливает историю: сообщения пользователя и ответы модели
+добавляются в `agent.messages`. Сбросить диалог можно через `agent.reset()`.
+Системный промпт задаётся в конструкторе:
+
+```python
+agent = Agent(
+    provider=MockProvider(),
+    system_prompt="Ты краткий и полезный помощник.",
+)
+```
+
 ### Инструменты (tool calling)
 
 Модель можно научить вызывать функции. Опишите инструмент через `Tool`
@@ -38,3 +113,27 @@ if response.message.tool_calls:
 ```python
 Message(role="tool", content="+15C", tool_call_id=call.id)
 ```
+
+## Разработка
+
+```bash
+# Установка зависимостей (включая dev)
+poetry install --with dev
+
+# Запуск тестов
+poetry run pytest
+
+# Линтинг
+poetry run ruff check .
+poetry run ruff format --check .
+
+# Проверка типов
+poetry run mypy ember
+```
+
+CI (GitHub Actions) автоматически прогоняет линтинг, проверку типов и тесты
+на Python 3.10–3.12 для каждого pull request.
+
+## Лицензия
+
+<!-- TODO: указать лицензию -->
