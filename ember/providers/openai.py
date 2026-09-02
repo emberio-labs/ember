@@ -15,7 +15,7 @@ from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Usage
 
 if TYPE_CHECKING:
     from openai import OpenAI, OpenAIError
-    from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam
+    from openai.types.chat import ChatCompletionMessageParam
 
 _OPENAI_IMPORT_HINT = (
     "OpenAIProvider требует пакет 'openai'. Установите его: pip install 'ember[openai]'"
@@ -66,9 +66,8 @@ class OpenAIProvider(Provider):
             ProviderError: Если OpenAI API вернул ошибку.
         """
         try:
-            completion = cast(
-                "ChatCompletion",
-                self._client.chat.completions.create(**self._build_params(request, stream=False)),
+            completion = self._client.chat.completions.create(
+                stream=False, **self._build_params(request)
             )
         except self._openai_error as exc:
             raise ProviderError(f"Ошибка OpenAI API: {exc}") from exc
@@ -106,9 +105,8 @@ class OpenAIProvider(Provider):
             ProviderError: Если OpenAI API вернул ошибку.
         """
         try:
-            chunks = cast(
-                "Iterator[ChatCompletionChunk]",
-                self._client.chat.completions.create(**self._build_params(request, stream=True)),
+            chunks = self._client.chat.completions.create(
+                stream=True, **self._build_params(request)
             )
         except self._openai_error as exc:
             raise ProviderError(f"Ошибка OpenAI API: {exc}") from exc
@@ -123,13 +121,12 @@ class OpenAIProvider(Provider):
                 finish_reason=choice.finish_reason,
             )
 
-    def _build_params(self, request: ChatRequest, *, stream: bool) -> dict[str, Any]:
-        """Собрать параметры для вызова chat.completions.create."""
+    def _build_params(self, request: ChatRequest) -> dict[str, Any]:
+        """Собрать параметры для вызова chat.completions.create (без stream)."""
         params: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": [self._to_openai_message(message) for message in request.messages],
             "temperature": request.temperature,
-            "stream": stream,
         }
         if request.max_tokens is not None:
             params["max_tokens"] = request.max_tokens
@@ -141,4 +138,6 @@ class OpenAIProvider(Provider):
         params: dict[str, Any] = {"role": message.role, "content": message.content}
         if message.name is not None:
             params["name"] = message.name
+        # cast: ChatCompletionMessageParam — union TypedDict'ов с Literal-ролями,
+        # а role в ядре — произвольный str, поэтому mypy не может выбрать вариант.
         return cast("ChatCompletionMessageParam", params)
