@@ -145,7 +145,7 @@ class Agent:
         """
         if result is None:
             return ""
-        if isinstance(result, (dict, list)):
+        if isinstance(result, dict | list):
             return json.dumps(result, ensure_ascii=False, default=str)
         return str(result)
 
