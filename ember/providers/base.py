@@ -8,6 +8,14 @@ from collections.abc import Iterator
 from ember.types import ChatRequest, ChatResponse, StreamChunk
 
 
+class ProviderError(Exception):
+    """Ошибка при обращении к LLM-провайдеру.
+
+    Адаптеры оборачивают ошибки SDK (сеть, неверный ключ, код ответа)
+    в этот тип, чтобы пользователь работал с единым интерфейсом ошибок.
+    """
+
+
 class Provider(ABC):
     """Единый интерфейс для LLM-провайдеров.
 
