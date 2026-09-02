@@ -2,7 +2,7 @@
 
 import pytest
 
-from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Usage
+from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Tool, ToolCall, Usage
 
 
 def test_message_defaults() -> None:
@@ -10,6 +10,8 @@ def test_message_defaults() -> None:
     assert msg.role == "user"
     assert msg.content == "Привет"
     assert msg.name is None
+    assert msg.tool_calls is None
+    assert msg.tool_call_id is None
 
 
 def test_message_with_name() -> None:
@@ -17,9 +19,48 @@ def test_message_with_name() -> None:
     assert msg.name == "alice"
 
 
+def test_message_with_tool_calls() -> None:
+    tool_call = ToolCall(id="call_1", name="get_weather", arguments='{"city": "Moscow"}')
+    msg = Message(role="assistant", content="", tool_calls=[tool_call])
+    assert msg.tool_calls == [tool_call]
+
+
+def test_tool_message_with_tool_call_id() -> None:
+    msg = Message(role="tool", content="+15C", tool_call_id="call_1")
+    assert msg.tool_call_id == "call_1"
+
+
+def test_tool_message_without_tool_call_id_raises() -> None:
+    with pytest.raises(ValueError, match="tool_call_id"):
+        Message(role="tool", content="+15C")
+
+
 def test_message_invalid_role_raises() -> None:
     with pytest.raises(ValueError, match="Недопустимая роль"):
         Message(role="admin", content="x")  # type: ignore[arg-type]
+
+
+def test_tool_call_defaults() -> None:
+    tool_call = ToolCall(id="call_1", name="get_weather")
+    assert tool_call.arguments == "{}"
+
+
+def test_tool_defaults() -> None:
+    tool = Tool(name="get_weather")
+    assert tool.description == ""
+    assert tool.parameters is None
+
+
+def test_tool_full() -> None:
+    parameters = {"type": "object", "properties": {"city": {"type": "string"}}}
+    tool = Tool(name="get_weather", description="Погода в городе", parameters=parameters)
+    assert tool.description == "Погода в городе"
+    assert tool.parameters == parameters
+
+
+def test_tool_empty_name_raises() -> None:
+    with pytest.raises(ValueError, match="Имя инструмента"):
+        Tool(name="")
 
 
 def test_chat_request_defaults() -> None:
@@ -28,6 +69,7 @@ def test_chat_request_defaults() -> None:
     assert request.temperature == 1.0
     assert request.max_tokens is None
     assert request.stream is False
+    assert request.tools is None
 
 
 def test_chat_request_full() -> None:
@@ -37,10 +79,12 @@ def test_chat_request_full() -> None:
         temperature=0.5,
         max_tokens=128,
         stream=True,
+        tools=[Tool(name="get_weather")],
     )
     assert request.temperature == 0.5
     assert request.max_tokens == 128
     assert request.stream is True
+    assert request.tools == [Tool(name="get_weather")]
 
 
 def test_chat_request_empty_messages_raises() -> None:

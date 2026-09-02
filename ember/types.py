@@ -7,7 +7,7 @@ Gemini, локальные модели) конвертирует свой фо�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 Role = Literal["system", "user", "assistant", "tool"]
 """Допустимые роли участников диалога."""
@@ -21,21 +21,67 @@ class Message:
 
     Attributes:
         role: Роль отправителя: system, user, assistant или tool.
-        content: Текст сообщения.
+        content: Текст сообщения. Для assistant-сообщений с вызовами
+            инструментов может быть пустой строкой.
         name: Опциональное имя участника — позволяет модели различать
             нескольких участников с одной ролью (например, нескольких
             пользователей или ассистентов в одном диалоге).
+        tool_calls: Запрошенные моделью вызовы инструментов (только для
+            роли assistant).
+        tool_call_id: Идентификатор вызова инструмента, на который отвечает
+            это сообщение (обязателен для роли tool).
     """
 
     role: Role
     content: str
     name: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.role not in _VALID_ROLES:
             raise ValueError(
                 f"Недопустимая роль: {self.role!r}. Ожидается одна из: {', '.join(_VALID_ROLES)}"
             )
+        if self.role == "tool" and not self.tool_call_id:
+            raise ValueError("Сообщение с ролью 'tool' должно содержать tool_call_id")
+
+
+@dataclass(slots=True)
+class ToolCall:
+    """Запрос модели на вызов инструмента.
+
+    Attributes:
+        id: Уникальный идентификатор вызова — по нему сопоставляется
+            результат выполнения (см. Message.tool_call_id).
+        name: Имя вызываемой функции.
+        arguments: Аргументы функции в виде JSON-строки.
+    """
+
+    id: str
+    name: str
+    arguments: str = "{}"
+
+
+@dataclass(slots=True)
+class Tool:
+    """Описание функции, доступной модели для вызова (tool calling).
+
+    Attributes:
+        name: Имя функции, которое модель укажет в tool_calls.
+        description: Описание: для чего функция, какие параметры — помогает
+            модели выбрать подходящий инструмент.
+        parameters: JSON Schema параметров функции (например,
+            ``{"type": "object", "properties": {...}}``).
+    """
+
+    name: str
+    description: str = ""
+    parameters: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("Имя инструмента не может быть пустым")
 
 
 @dataclass(slots=True)
@@ -63,6 +109,7 @@ class ChatRequest:
         temperature: Креативность ответа, от 0.0 (детерминированно) и выше.
         max_tokens: Максимум токенов в ответе. None — ограничение провайдера.
         stream: Использовать ли потоковый режим ответа.
+        tools: Описания функций, которые модель может вызвать.
     """
 
     messages: list[Message]
@@ -70,6 +117,7 @@ class ChatRequest:
     temperature: float = 1.0
     max_tokens: int | None = None
     stream: bool = False
+    tools: list[Tool] | None = None
 
     def __post_init__(self) -> None:
         if not self.messages:
@@ -85,7 +133,8 @@ class ChatResponse:
     """Ответ модели на ChatRequest.
 
     Attributes:
-        message: Сообщение с ответом модели (роль assistant).
+        message: Сообщение с ответом модели (роль assistant). Если модель
+            решила вызвать инструменты, заполнено поле message.tool_calls.
         model: Модель, которая сформировала ответ.
         usage: Счётчики токенов, если провайдер их вернул.
     """

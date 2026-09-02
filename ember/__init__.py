@@ -9,7 +9,15 @@ from ember.providers import (
     get_provider,
     register_provider,
 )
-from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, Usage
+from ember.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    StreamChunk,
+    Tool,
+    ToolCall,
+    Usage,
+)
 
 __version__ = "0.1.0"
 
@@ -24,6 +32,8 @@ __all__ = [
     "Provider",
     "ProviderError",
     "StreamChunk",
+    "Tool",
+    "ToolCall",
     "Usage",
     "get_provider",
     "register_provider",
