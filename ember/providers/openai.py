@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -26,17 +25,19 @@ _OPENAI_IMPORT_HINT = (
 class OpenAIProvider(Provider):
     """Провайдер поверх официального OpenAI SDK.
 
+    API-ключ передаётся явно в конструкторе; провайдер сам не читает
+    окружение и файлы ``.env`` — управление ключом полностью на стороне
+    вызывающего кода.
+
     Атрибуты:
         model: Модель по умолчанию, используемая, когда запрос её не задаёт.
 
     Args:
-        api_key: API-ключ OpenAI. По умолчанию берётся из переменной
-            окружения ``OPENAI_API_KEY``.
+        api_key: API-ключ OpenAI (обязательный).
         model: Модель по умолчанию (например, "gpt-4o-mini").
 
     Raises:
         ImportError: Если пакет ``openai`` не установлен.
-        ValueError: Если API-ключ не передан и не задан в окружении.
     """
 
     _client: OpenAI
@@ -44,7 +45,7 @@ class OpenAIProvider(Provider):
 
     def __init__(
         self,
-        api_key: str | None = None,
+        api_key: str,
         model: str = "gpt-4o-mini",
     ) -> None:
         try:
@@ -52,14 +53,8 @@ class OpenAIProvider(Provider):
         except ImportError as exc:
             raise ImportError(_OPENAI_IMPORT_HINT) from exc
 
-        resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not resolved_key:
-            raise ValueError(
-                "Не указан API-ключ: передайте api_key или задайте переменную OPENAI_API_KEY"
-            )
-
         self.model = model
-        self._client = OpenAI(api_key=resolved_key)
+        self._client = OpenAI(api_key=api_key)
         self._openai_error = OpenAIError
 
     def complete(self, request: ChatRequest) -> ChatResponse:

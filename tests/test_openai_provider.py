@@ -180,6 +180,12 @@ def test_openai_default_model_from_constructor(fake_client: FakeClient) -> None:
     assert fake_client.chat.completions.calls[-1]["model"] == "gpt-4o"
 
 
+def test_openai_passes_api_key_to_client(fake_client: FakeClient) -> None:
+    OpenAIProvider(api_key="test-key")
+
+    assert fake_client.api_key == "test-key"
+
+
 def test_openai_stream_params(fake_client: FakeClient) -> None:
     provider = OpenAIProvider(api_key="test-key")
     fake_client.chat.completions.set_result([])
@@ -233,23 +239,9 @@ def test_openai_error_wrapped(fake_client: FakeClient) -> None:
         provider.complete(_request())
 
 
-def test_openai_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        OpenAIProvider()
-
-
-def test_openai_api_key_from_env(monkeypatch: pytest.MonkeyPatch, fake_client: FakeClient) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
-
-    OpenAIProvider()
-
-    assert fake_client.api_key == "env-key"
-
-
 def test_registry_get_openai(fake_client: FakeClient) -> None:
     provider = get_provider("openai", api_key="test-key")
 
     assert isinstance(provider, OpenAIProvider)
     assert provider.model == "gpt-4o-mini"
+    assert fake_client.api_key == "test-key"
