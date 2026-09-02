@@ -34,8 +34,7 @@ class Message:
     def __post_init__(self) -> None:
         if self.role not in _VALID_ROLES:
             raise ValueError(
-                f"Недопустимая роль: {self.role!r}. "
-                f"Ожидается одна из: {', '.join(_VALID_ROLES)}"
+                f"Недопустимая роль: {self.role!r}. Ожидается одна из: {', '.join(_VALID_ROLES)}"
             )
 
 
