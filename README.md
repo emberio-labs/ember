@@ -20,12 +20,56 @@
 poetry install
 ```
 
+Для работы с OpenAI дополнительно нужен пакет `openai` (устанавливается
+вместе с extra `ember[openai]`):
+
+```bash
+pip install "ember[openai]"
+```
+
 ## Быстрый старт
 
-```python
-import ember
+### Без ключей: `MockProvider`
 
-# TODO: добавить пример создания агента после реализации API
+Работает без сети и API-ключей — удобно для экспериментов:
+
+```python
+from ember import Agent, MockProvider
+
+agent = Agent(provider=MockProvider(response_text="Привет! Я мок-провайдер."))
+print(agent.run("Привет!"))
+# Привет! Я мок-провайдер.
+```
+
+### С OpenAI: `OpenAIProvider`
+
+API-ключ передаётся явно (провайдер сам не читает окружение):
+
+```python
+import os
+
+from ember import Agent, OpenAIProvider
+
+agent = Agent(
+    provider=OpenAIProvider(api_key=os.environ["OPENAI_API_KEY"]),
+    model="gpt-4o-mini",
+)
+print(agent.run("Расскажи о себе в одном предложении."))
+```
+
+Полный исполняемый пример — в [`examples/quickstart.py`](examples/quickstart.py).
+
+### История диалога
+
+`Agent` сам накапливает историю: сообщения пользователя и ответы модели
+добавляются в `agent.messages`. Сбросить диалог можно через `agent.reset()`.
+Системный промпт задаётся в конструкторе:
+
+```python
+agent = Agent(
+    provider=MockProvider(),
+    system_prompt="Ты краткий и полезный помощник.",
+)
 ```
 
 ## Разработка

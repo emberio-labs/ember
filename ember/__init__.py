@@ -1,5 +1,6 @@
 """ember — библиотека для простой интеграции с LLM-провайдерами и создания агентов."""
 
+from ember.agent import Agent
 from ember.providers import (
     MockProvider,
     OpenAIProvider,
@@ -14,6 +15,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
+    "Agent",
     "ChatRequest",
     "ChatResponse",
     "Message",
