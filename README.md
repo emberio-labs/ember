@@ -15,17 +15,18 @@
 
 ## Установка
 
-Проект управляется через [Poetry](https://python-poetry.org/).
+На PyPI пакет публикуется под именем `emberio-labs-ember` (импорт в коде — `ember`):
+
+```bash
+pip install "emberio-labs-ember[openai]"   # с поддержкой OpenAI
+pip install emberio-labs-ember             # ядро (без провайдеров)
+```
+
+Для разработки (из репозитория) проект управляется через
+[Poetry](https://python-poetry.org/):
 
 ```bash
 poetry install
-```
-
-Для работы с OpenAI дополнительно нужен пакет `openai` (устанавливается
-вместе с extra `ember[openai]`):
-
-```bash
-pip install "ember[openai]"
 ```
 
 ## Быстрый старт
@@ -152,14 +153,23 @@ CI (GitHub Actions) автоматически прогоняет линтинг
    Ветка `main` при этом не нужна — достаточно тега.
 
 Публикация использует Trusted Publishing (OIDC): секреты в GitHub не хранятся.
-Для этого владельцу нужно один раз настроить publisher на PyPI:
+Для этого владельцу нужно один раз настроить publisher на PyPI
+(и, опционально, на TestPyPI для проверок):
 
-- **PyPI:** https://pypi.org/manage/account/publishing/ —
-  `emberio-labs/ember`, workflow name `publish.yml`
-- **TestPyPI** (опционально, для проверки перед боевым релизом):
-  https://test.pypi.org/manage/account/publishing/ — тот же publisher
+- **PyPI:** https://pypi.org/manage/account/publishing/
+- **TestPyPI:** https://test.pypi.org/manage/account/publishing/
 
-После настройки проверить публикацию на TestPyPI можно вручную:
+Поля формы одинаковы для PyPI и TestPyPI:
+
+| Поле | Значение |
+|---|---|
+| Project name | `emberio-labs-ember` |
+| GitHub owner | `emberio-labs` |
+| GitHub repository | `ember` |
+| Workflow name | `publish.yml` |
+| Environment | *(пусто)* |
+
+После настройки публикацию можно проверить вручную на TestPyPI:
 GitHub → Actions → Publish → Run workflow. На боевой PyPI пакет уходит
 только по git-тегу `v*`.
 
