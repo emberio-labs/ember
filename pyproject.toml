@@ -1,11 +1,15 @@
 [tool.poetry]
-name = "ember"
+name = "emberio-labs-ember"
 version = "0.1.0"
 description = "Библиотека для простой интеграции с LLM-провайдерами и создания собственных агентов"
 license = "MIT"
 authors = ["Ember Labs <dev@emberio.labs>"]
 readme = "README.md"
 packages = [{ include = "ember" }]
+
+[tool.poetry.urls]
+Homepage = "https://github.com/emberio-labs/ember"
+Repository = "https://github.com/emberio-labs/ember"
 
 [tool.poetry.dependencies]
 python = "^3.10"

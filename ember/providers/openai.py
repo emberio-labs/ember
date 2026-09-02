@@ -2,7 +2,7 @@
 
 Модуль импортирует SDK лениво (в конструкторе), чтобы ядро ember оставалось
 лёгким: без установки ``openai`` остальной функционал библиотеки работает.
-Установите пакет: ``pip install "ember[openai]"``.
+Установите пакет: ``pip install "emberio-labs-ember[openai]"``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
 _OPENAI_IMPORT_HINT = (
-    "OpenAIProvider требует пакет 'openai'. Установите его: pip install 'ember[openai]'"
+    "OpenAIProvider требует пакет 'openai'. Установите его: "
+    "pip install 'emberio-labs-ember[openai]'"
 )
 
 
