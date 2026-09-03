@@ -9,6 +9,7 @@
 - Единый интерфейс для различных LLM-провайдеров
 - Простой способ создавать и конфигурировать собственных агентов
 - Инструменты/функции для модели (tool calling)
+- Подключение внешних инструментов по MCP (Model Context Protocol)
 - Минимальное количество кода для старта
 
 > ⚠️ Проект на ранней стадии разработки. API активно меняется.
@@ -19,6 +20,7 @@
 
 ```bash
 pip install "emberio-labs-ember[openai]"   # с поддержкой OpenAI
+pip install "emberio-labs-ember[mcp]"      # с поддержкой MCP-клиента
 pip install emberio-labs-ember             # ядро (без провайдеров)
 ```
 
@@ -113,6 +115,51 @@ if response.message.tool_calls:
 
 ```python
 Message(role="tool", content="+15C", tool_call_id=call.id)
+```
+
+### MCP: внешние инструменты (Model Context Protocol)
+
+[MCP](https://modelcontextprotocol.io) — открытый стандарт интеграции
+инструментов с LLM-агентами. `ember` умеет подключаться к MCP-серверам
+(клиентская часть) и использовать их инструменты наряду с локальными
+`FunctionTool`. Сервер при этом может быть как вашим процессом, так
+и сторонним сервисом.
+
+Подключение к серверу — через `MCPClient`:
+
+```python
+from ember import Agent, MCPClient
+
+# stdio: сервер запускается как дочерний процесс
+with MCPClient.stdio(command="python", args=["server.py"]) as mcp:
+    agent = Agent(provider=provider, tools=mcp.list_tools())
+    print(agent.run("Проверь доступность сервиса."))
+```
+
+`MCPClient.list_tools()` выполняет `tools/list` и возвращает обычные
+`FunctionTool`: JSON Schema параметров сохраняется, а `func` проксирует
+вызов на сервер (`tools/call`). Для агента такие инструменты ничем не
+отличаются от локальных — они исполняются в цикле `agent.run()`,
+результаты возвращаются модели сообщениями `role=tool`, а в одном агенте
+можно смешивать MCP-инструменты и локальные функции.
+
+Поддерживается и streamable HTTP транспорт — передайте URL endpoint:
+
+```python
+with MCPClient.http("http://127.0.0.1:8000/mcp") as mcp:
+    tools = mcp.list_tools()
+```
+
+Ошибки транспорта и сервера (падение процесса, таймаут, сбой `tools/call`)
+оборачиваются в `MCPError` — понятное исключение по образцу `ProviderError`.
+Требуется пакет `mcp` (extra `ember[mcp]`).
+
+Полный исполняемый пример — [`examples/mcp_client.py`](examples/mcp_client.py):
+он запускает MCP-сервер с инструментом `ping` и исполняет его агентом
+без API-ключей:
+
+```bash
+python examples/mcp_client.py
 ```
 
 ## Разработка

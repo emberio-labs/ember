@@ -14,15 +14,18 @@ Repository = "https://github.com/emberio-labs/ember"
 [tool.poetry.dependencies]
 python = "^3.10"
 openai = { version = "^3.0", optional = true }
+mcp = { version = "^2.0", optional = true }
 
 [tool.poetry.extras]
 openai = ["openai"]
+mcp = ["mcp"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 ruff = "^0.9"
 mypy = "^1.10"
 openai = "^3.0"
+mcp = "^2.0"
 
 [build-system]
 requires = ["poetry-core"]
