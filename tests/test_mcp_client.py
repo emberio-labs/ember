@@ -24,6 +24,9 @@ from ember.types import ChatRequest, ChatResponse, FunctionTool, Message, Stream
 
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server_script.py"
 
+# Заголовок, который требует тестовый HTTP-сервер с --http-require-header.
+AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+
 
 def make_stdio_client(timeout: float = 60.0) -> MCPClient:
     """Клиент к тестовому MCP-серверу (запускается как дочерний процесс)."""
@@ -47,23 +50,38 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _start_http_server(port: int) -> subprocess.Popen[Any]:
-    """Запустить тестовый MCP-сервер по streamable HTTP на 127.0.0.1."""
+def _start_http_server(
+    port: int, *, require_header: tuple[str, str] | None = None
+) -> subprocess.Popen[Any]:
+    """Запустить тестовый MCP-сервер по streamable HTTP на 127.0.0.1.
+
+    ``require_header`` — пара (имя, значение): сервер будет отвечать 401
+    на запросы без этого заголовка (флаг ``--http-require-header``).
+    """
+    command = [sys.executable, str(SERVER_SCRIPT), "--http", str(port)]
+    if require_header is not None:
+        name, value = require_header
+        command += ["--http-require-header", name, value]
     return subprocess.Popen(
-        [sys.executable, str(SERVER_SCRIPT), "--http", str(port)],
+        command,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
 
-def _wait_http_ready(url: str, process: subprocess.Popen[Any]) -> None:
+def _wait_http_ready(
+    url: str,
+    process: subprocess.Popen[Any],
+    *,
+    headers: dict[str, str] | None = None,
+) -> None:
     """Дождаться, пока сервер начнёт отвечать на MCP-запросы."""
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"HTTP MCP-сервер завершился при запуске (код {process.returncode})")
         try:
-            with MCPClient.http(url, timeout=2.0) as client:
+            with MCPClient.http(url, timeout=2.0, headers=headers) as client:
                 client.list_tools()
             return
         except MCPError:
@@ -79,6 +97,23 @@ def http_server_url() -> Iterator[str]:
     url = f"http://127.0.0.1:{port}/mcp"
     try:
         _wait_http_ready(url, process)
+        yield url
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
+@pytest.fixture(scope="module")
+def http_auth_url() -> Iterator[str]:
+    """URL сервера, который принимает только запросы с AUTH_HEADERS."""
+    port = _free_port()
+    process = _start_http_server(port, require_header=("Authorization", "Bearer test-token"))
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        _wait_http_ready(url, process, headers=AUTH_HEADERS)
         yield url
     finally:
         process.terminate()
@@ -301,6 +336,27 @@ def test_http_tools_work_with_agent(http_server_url: str) -> None:
         tool_messages = [m for m in agent.messages if m.role == "tool"]
         assert len(tool_messages) == 1
         assert tool_messages[0].content == "В городе Париж: +18 °C, ясно"
+
+
+def test_http_headers_are_sent_to_server(http_auth_url: str) -> None:
+    """headers= отправляются с каждым запросом — сервер их принимает."""
+    with MCPClient.http(http_auth_url, timeout=15.0, headers=AUTH_HEADERS) as client:
+        tools = client.list_tools()
+
+        names = {tool.name for tool in tools}
+        assert "ping" in names
+        assert client.call_tool("ping") == "pong"
+
+
+def test_http_without_required_header_is_rejected(http_auth_url: str) -> None:
+    """Без ожидаемого заголовка сервер отклоняет запрос — MCPError."""
+    client = MCPClient.http(http_auth_url, timeout=15.0)
+
+    with pytest.raises(MCPError):
+        client.connect()
+
+    # После неудачного connect клиент полностью закрыт и переиспользуем.
+    client.close()
 
 
 # -- ошибки использования до подключения ---------------------------------

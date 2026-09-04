@@ -146,13 +146,27 @@ with MCPClient.stdio(command="python", args=["server.py"]) as mcp:
 Поддерживается и streamable HTTP транспорт — передайте URL endpoint:
 
 ```python
+from ember import Agent, MCPClient
+
 with MCPClient.http("http://127.0.0.1:8000/mcp") as mcp:
+    agent = Agent(provider=provider, tools=mcp.list_tools())
+    print(agent.run("Проверь доступность сервиса."))
+```
+
+Если сервер требует аутентификацию или другие HTTP-заголовки, передайте
+их словарём в `headers=` — заголовки уходят с каждым запросом:
+
+```python
+with MCPClient.http(
+    "https://mcp.example.com/mcp",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+) as mcp:
     tools = mcp.list_tools()
 ```
 
-Ошибки транспорта и сервера (падение процесса, таймаут, сбой `tools/call`)
-оборачиваются в `MCPError` — понятное исключение по образцу `ProviderError`.
-Требуется пакет `mcp` (extra `ember[mcp]`).
+Ошибки транспорта и сервера (падение процесса, таймаут, сбой `tools/call`,
+отказ HTTP-сервера) оборачиваются в `MCPError` — понятное исключение
+по образцу `ProviderError`. Требуется пакет `mcp` (extra `ember[mcp]`).
 
 Полный исполняемый пример — [`examples/mcp_client.py`](examples/mcp_client.py):
 он запускает MCP-сервер с инструментом `ping` и исполняет его агентом
