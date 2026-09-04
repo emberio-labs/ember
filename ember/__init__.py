@@ -1,6 +1,7 @@
 """ember — библиотека для простой интеграции с LLM-провайдерами и создания агентов."""
 
 from ember.agent import Agent, ToolCallLimitError
+from ember.mcp import MCPClient, MCPError
 from ember.providers import (
     MockProvider,
     OpenAIProvider,
@@ -28,6 +29,8 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "FunctionTool",
+    "MCPClient",
+    "MCPError",
     "Message",
     "MockProvider",
     "OpenAIProvider",
