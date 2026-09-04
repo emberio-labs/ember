@@ -388,9 +388,7 @@ def test_registry_get_openai(fake_client: FakeClient) -> None:
 
 
 def test_registry_get_openai_with_base_url(fake_client: FakeClient) -> None:
-    provider = get_provider(
-        "openai", api_key="test-key", base_url="http://localhost:1234/v1"
-    )
+    provider = get_provider("openai", api_key="test-key", base_url="http://localhost:1234/v1")
 
     assert isinstance(provider, OpenAIProvider)
     assert fake_client.api_key == "test-key"
