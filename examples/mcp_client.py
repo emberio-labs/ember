@@ -77,9 +77,7 @@ def main() -> None:
                     ),
                     model="mock-mcp",
                 )
-            tool_result = next(
-                m.content for m in reversed(request.messages) if m.role == "tool"
-            )
+            tool_result = next(m.content for m in reversed(request.messages) if m.role == "tool")
             return ChatResponse(
                 message=Message(
                     role="assistant",

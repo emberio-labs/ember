@@ -61,9 +61,7 @@ def _wait_http_ready(url: str, process: subprocess.Popen[Any]) -> None:
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(
-                f"HTTP MCP-сервер завершился при запуске (код {process.returncode})"
-            )
+            raise RuntimeError(f"HTTP MCP-сервер завершился при запуске (код {process.returncode})")
         try:
             with MCPClient.http(url, timeout=2.0) as client:
                 client.list_tools()
