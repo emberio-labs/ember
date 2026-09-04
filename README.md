@@ -63,6 +63,40 @@ print(agent.run("Расскажи о себе в одном предложени
 
 Полный исполняемый пример — в [`examples/quickstart.py`](examples/quickstart.py).
 
+### OpenAI-совместимые API (`base_url`)
+
+Chat Completions — де-факто индустриальный стандарт: его поддерживают
+облачные провайдеры (OpenRouter, Groq, DeepSeek, Mistral, Perplexity)
+и локальные/self-hosted серверы (LM Studio, vLLM, LocalAI). Тот же
+`OpenAIProvider` подключается к любому из них через `base_url`:
+
+```python
+import os
+
+from ember import Agent, OpenAIProvider
+
+# облачный провайдер (пример: Groq)
+agent = Agent(
+    provider=OpenAIProvider(
+        api_key=os.environ["GROQ_API_KEY"],
+        base_url="https://api.groq.com/openai/v1",
+        model="llama-3.1-8b-instant",
+    ),
+)
+
+# локальный сервер (пример: LM Studio) — ключ не требуется, передайте заглушку
+provider = OpenAIProvider(
+    api_key="sk-local",
+    base_url="http://localhost:1234/v1",
+    model="local-model",
+)
+```
+
+`base_url` — это полный URL до версии API: SDK сам добавит
+`/chat/completions`, а `/v1` дописывать за вас никто не будет. Ключ
+остаётся обязательным параметром конструктора; локальные серверы обычно
+игнорируют его значение.
+
 ### История диалога
 
 `Agent` сам накапливает историю: сообщения пользователя и ответы модели

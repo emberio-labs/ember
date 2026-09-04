@@ -26,12 +26,22 @@ _OPENAI_IMPORT_HINT = (
 class OpenAIProvider(Provider):
     """Провайдер поверх официального OpenAI SDK.
 
+    Работает с OpenAI и любыми OpenAI-совместимыми API (OpenRouter, Groq,
+    LM Studio и т.п.) — передайте полный ``base_url``. URL должен включать
+    путь до версии API (``https://api.groq.com/openai/v1``,
+    ``http://localhost:1234/v1``): SDK сам добавит ``/chat/completions``,
+    авто-добавления ``/v1`` нет.
+
     Атрибуты:
         model: Модель по умолчанию, используемая, когда запрос её не задаёт.
 
     Args:
-        api_key: API-ключ OpenAI (обязательный).
+        api_key: API-ключ (обязательный). Для локальных серверов без
+            аутентификации передайте строку-заглушку (например, "sk-local") —
+            большинство локальных серверов её игнорируют.
         model: Модель по умолчанию (например, "gpt-4o-mini").
+        base_url: Полный URL OpenAI-совместимого API. ``None`` — дефолт SDK
+            (https://api.openai.com/v1), поведение не меняется.
 
     Raises:
         ImportError: Если пакет ``openai`` не установлен.
@@ -44,6 +54,7 @@ class OpenAIProvider(Provider):
         self,
         api_key: str,
         model: str = "gpt-4o-mini",
+        base_url: str | None = None,
     ) -> None:
         try:
             from openai import OpenAI, OpenAIError
@@ -51,7 +62,10 @@ class OpenAIProvider(Provider):
             raise ImportError(_OPENAI_IMPORT_HINT) from exc
 
         self.model = model
-        self._client = OpenAI(api_key=api_key)
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url is not None:
+            client_kwargs["base_url"] = base_url
+        self._client = OpenAI(**client_kwargs)
         self._openai_error = OpenAIError
 
     def complete(self, request: ChatRequest) -> ChatResponse:

@@ -36,6 +36,7 @@ class FakeClient:
 
     def __init__(self, **kwargs: object) -> None:
         self.api_key = kwargs.get("api_key")
+        self.base_url = kwargs.get("base_url")
         self.chat = FakeChat()
 
 
@@ -45,6 +46,7 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
 
     def factory(**kwargs: object) -> FakeClient:
         client.api_key = kwargs.get("api_key")
+        client.base_url = kwargs.get("base_url")
         return client
 
     monkeypatch.setattr("openai.OpenAI", factory)
@@ -204,6 +206,31 @@ def test_openai_passes_api_key_to_client(fake_client: FakeClient) -> None:
     assert fake_client.api_key == "test-key"
 
 
+def test_openai_passes_base_url_to_client(fake_client: FakeClient) -> None:
+    OpenAIProvider(api_key="test-key", base_url="http://localhost:1234/v1")
+
+    assert fake_client.base_url == "http://localhost:1234/v1"
+
+
+def test_openai_without_base_url_omits_client_arg(fake_client: FakeClient) -> None:
+    OpenAIProvider(api_key="test-key")
+
+    assert fake_client.base_url is None
+
+
+def test_openai_complete_with_base_url(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(
+        api_key="test-key", base_url="https://api.groq.com/openai/v1", model="llama-3.1-8b"
+    )
+    fake_client.chat.completions.set_result(_completion(model="llama-3.1-8b"))
+
+    response = provider.complete(_request(model="llama-3.1-8b"))
+
+    assert fake_client.base_url == "https://api.groq.com/openai/v1"
+    assert response.message.content == "Hello"
+    assert fake_client.chat.completions.calls[-1]["model"] == "llama-3.1-8b"
+
+
 def test_openai_stream_params(fake_client: FakeClient) -> None:
     provider = OpenAIProvider(api_key="test-key")
     fake_client.chat.completions.set_result([])
@@ -358,3 +385,13 @@ def test_registry_get_openai(fake_client: FakeClient) -> None:
     assert isinstance(provider, OpenAIProvider)
     assert provider.model == "gpt-4o-mini"
     assert fake_client.api_key == "test-key"
+
+
+def test_registry_get_openai_with_base_url(fake_client: FakeClient) -> None:
+    provider = get_provider(
+        "openai", api_key="test-key", base_url="http://localhost:1234/v1"
+    )
+
+    assert isinstance(provider, OpenAIProvider)
+    assert fake_client.api_key == "test-key"
+    assert fake_client.base_url == "http://localhost:1234/v1"
