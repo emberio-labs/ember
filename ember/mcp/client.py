@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import json
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -41,6 +41,30 @@ class MCPError(Exception):
     """
 
 
+@contextlib.asynccontextmanager
+async def _http_transport(
+    url: str, headers: dict[str, str]
+) -> AsyncGenerator[tuple[Any, Any], None]:
+    """Async context manager: streamable HTTP транспорт с заголовками.
+
+    MCP SDK умеет добавлять HTTP-заголовки только через готовый
+    ``httpx2.AsyncClient`` (``streamable_http_client(url, http_client=...)``),
+    а сам URL-транспорт SDK создаёт без заголовков. Оборачиваем клиент с
+    заголовками в async context manager, отдающий пару потоков, — его можно
+    передать в ``mcp.Client(server=...)`` как transport.
+    """
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+
+    # Таймауты MCP SDK по умолчанию: 30s connect/write, 300s read (SSE).
+    timeout = httpx2.Timeout(30.0, read=300.0)
+    async with (
+        httpx2.AsyncClient(headers=headers, timeout=timeout, follow_redirects=True) as client,
+        streamable_http_client(url, http_client=client) as streams,
+    ):
+        yield streams
+
+
 class MCPClient:
     """Синхронный клиент одного MCP-сервера.
 
@@ -60,6 +84,8 @@ class MCPClient:
         server: Адрес сервера: ``StdioServerParameters`` (дочерний процесс)
             или URL streamable HTTP endpoint.
         timeout: Таймаут на подключение и на каждый вызов (секунды).
+        headers: Дополнительные HTTP-заголовки для запросов к серверу
+            (только для streamable HTTP; по умолчанию не отправляются).
     """
 
     def __init__(
@@ -67,11 +93,13 @@ class MCPClient:
         server: StdioServerParameters | str,
         *,
         timeout: float = 60.0,
+        headers: dict[str, str] | None = None,
     ) -> None:
         if timeout <= 0:
             raise ValueError("timeout должен быть положительным числом")
         self._server = server
         self._timeout = timeout
+        self._headers = headers
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._client: Any = None
@@ -116,12 +144,21 @@ class MCPClient:
         )
 
     @classmethod
-    def http(cls, url: str, *, timeout: float = 60.0) -> MCPClient:
+    def http(
+        cls,
+        url: str,
+        *,
+        timeout: float = 60.0,
+        headers: dict[str, str] | None = None,
+    ) -> MCPClient:
         """Клиент для streamable HTTP endpoint сервера.
 
         Args:
             url: URL endpoint (например, ``"http://127.0.0.1:8000/mcp"``).
             timeout: Таймаут на подключение и на каждый вызов (секунды).
+            headers: Дополнительные HTTP-заголовки, отправляемые с каждым
+                запросом к серверу — например, ``{"Authorization": "Bearer ..."}``
+                для серверов с аутентификацией.
 
         Returns:
             Ещё не подключённый ``MCPClient``.
@@ -131,7 +168,7 @@ class MCPClient:
         """
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"Некорректный URL MCP-сервера: {url!r}")
-        return cls(server=url, timeout=timeout)
+        return cls(server=url, timeout=timeout, headers=headers)
 
     # -- жизненный цикл --------------------------------------------------
 
@@ -281,7 +318,12 @@ class MCPClient:
         """Создать MCP-сессию (выполняется в фоновом loop)."""
         import mcp
 
-        client = mcp.Client(server=self._server, read_timeout_seconds=self._timeout)
+        server: Any = self._server
+        if isinstance(self._server, str) and self._headers:
+            # Для URL-транспорта заголовки можно добавить только через
+            # собственный httpx-клиент: оборачиваем его в transport.
+            server = _http_transport(self._server, self._headers)
+        client = mcp.Client(server=server, read_timeout_seconds=self._timeout)
         await client.__aenter__()
         self._client = client
         self._connected = True
