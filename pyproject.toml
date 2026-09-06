@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "emberio-labs-ember"
-version = "0.3.0"
+version = "0.4.0"
 description = "Библиотека для простой интеграции с LLM-провайдерами и создания собственных агентов"
 license = "MIT"
 authors = ["Ember Labs <dev@emberio.labs>"]
