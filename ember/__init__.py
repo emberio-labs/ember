@@ -2,6 +2,7 @@
 
 from ember.agent import Agent, ToolCallLimitError
 from ember.mcp import MCPClient, MCPError
+from ember.memory import FileMemory, Memory
 from ember.providers import (
     MockProvider,
     OpenAIProvider,
@@ -28,9 +29,11 @@ __all__ = [
     "Agent",
     "ChatRequest",
     "ChatResponse",
+    "FileMemory",
     "FunctionTool",
     "MCPClient",
     "MCPError",
+    "Memory",
     "Message",
     "MockProvider",
     "OpenAIProvider",
