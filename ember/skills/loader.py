@@ -169,8 +169,7 @@ def parse_skill(skill_md: str | Path) -> Skill | None:
         _warn(
             "name-mismatch",
             str(path),
-            f"У скилла {path} name={name!r} не совпадает с именем каталога "
-            f"{path.parent.name!r}",
+            f"У скилла {path} name={name!r} не совпадает с именем каталога {path.parent.name!r}",
         )
     return Skill(
         name=name,

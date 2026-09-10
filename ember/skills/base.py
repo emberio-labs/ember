@@ -81,7 +81,5 @@ def validate_description(description: str) -> str:
     if not text:
         raise ValueError("Описание скилла (description) не может быть пустым")
     if len(text) > MAX_DESCRIPTION_LENGTH:
-        raise ValueError(
-            f"Описание скилла длиннее {MAX_DESCRIPTION_LENGTH} символов: {len(text)}"
-        )
+        raise ValueError(f"Описание скилла длиннее {MAX_DESCRIPTION_LENGTH} символов: {len(text)}")
     return text
