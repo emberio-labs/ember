@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 from ember.memory import Memory
 from ember.providers.base import Provider
+from ember.skills import SkillStore
 from ember.types import ChatRequest, FunctionTool, Message, ToolCall
 
 #: Сколько сообщений из прошлых сессий подмешивать в контекст при recall.
@@ -34,6 +36,14 @@ class Agent:
     возвращается модели как tool-сообщение, и диалог продолжается до тех
     пор, пока модель не даст финальный текстовый ответ.
 
+    Если задан ``skills_dirs``, агент работает со скиллами по стандарту
+    Agent Skills: каталоги сканируются (порядок = приоритет), в системный
+    промпт добавляется tier-1 каталог (``name`` + ``description``), а модели
+    становятся доступны инструменты ``read_skill`` (подгрузить тело) и
+    ``save_skill`` (создать/обновить скилл в первом каталоге). Каталог
+    перечитывается с диска на каждый запрос — сохранённые скиллы видны сразу.
+    Без ``skills_dirs`` скиллы выключены: ни инструментов, ни секции в промпте.
+
     Если заданы ``memory`` и ``session_id``, агент становится персистентным:
     при создании он загружает сохранённую историю сессии (system ставит первым
     сам), а после каждого ``run()``/``stream_run()`` сохраняет диалог обратно
@@ -45,7 +55,8 @@ class Agent:
         provider: Провайдер, через который агент общается с моделью.
         model: Модель по умолчанию. Если не задана, провайдер использует
             свою модель по умолчанию.
-        tools: Инструменты, доступные модели (описание + функция).
+        tools: Инструменты, доступные модели (описание + функция). Включает
+            встроенные инструменты скиллов, если задан ``skills_dirs``.
         max_tool_steps: Максимум раундов исполнения инструментов за один
             ``run()``. Один раунд — один запрос к модели и исполнение всех
             запрошенных в ответе вызовов.
@@ -64,13 +75,18 @@ class Agent:
         max_tool_steps: int = 10,
         memory: Memory | None = None,
         session_id: str | None = None,
+        skills_dirs: Sequence[str | Path] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
-        self.tools = tools
         self.max_tool_steps = max_tool_steps
         self.memory = memory
         self.session_id = session_id
+        self._skill_store = SkillStore(skills_dirs) if skills_dirs else None
+        combined_tools = list(tools) if tools else []
+        if self._skill_store is not None:
+            combined_tools.extend(self._skill_store.tools())
+        self.tools: list[FunctionTool] | None = combined_tools or None
         self.messages: list[Message] = []
         if system_prompt:
             self.messages.append(Message(role="system", content=system_prompt))
@@ -86,7 +102,7 @@ class Agent:
             self.messages.extend(message for message in saved if message.role != "system")
         self._validate()
         self._tool_index: dict[str, FunctionTool] = (
-            {tool.name: tool for tool in tools} if tools else {}
+            {tool.name: tool for tool in self.tools} if self.tools else {}
         )
 
     def _validate(self) -> None:
@@ -112,7 +128,7 @@ class Agent:
         вызовами, tool-результаты) попадают в историю.
 
         Если задана память (``memory`` + ``session_id``), перед первым запросом
-        выполняется recall по ``user_input`` (см. ``_recall_context``), а по
+        выполняется recall по ``user_input`` (см. ``_recall_message``), а по
         завершении — успешном или с исключением — диалог сохраняется в хранилище.
 
         Args:
@@ -199,8 +215,9 @@ class Agent:
             Фрагменты текста ответа модели.
 
         Raises:
-            ValueError: Если у агента заданы инструменты — потоковый ответ
-                не разбирает ``tool_calls``, используйте ``run()``.
+            ValueError: Если у агента заданы инструменты (включая встроенные
+                инструменты скиллов) — потоковый ответ не разбирает
+                ``tool_calls``, используйте ``run()``.
         """
         if self.tools:
             raise ValueError(
@@ -209,7 +226,7 @@ class Agent:
             )
         self.messages.append(Message(role="user", content=user_input))
         request = ChatRequest(
-            messages=self._recall_context(user_input),
+            messages=self._prepare_messages(user_input),
             model=self.model or "",
             stream=True,
         )
@@ -239,38 +256,66 @@ class Agent:
         # иначе последующие append в self.messages мутируют переданный запрос.
         # Пустая model означает «модель провайдера по умолчанию»: адаптеры
         # (например, OpenAIProvider) подставляют свою дефолтную модель.
-        messages = self._recall_context(recall_query) if recall_query else list(self.messages)
         return ChatRequest(
-            messages=messages,
+            messages=self._prepare_messages(recall_query),
             model=self.model or "",
             tools=self.tools,
         )
 
-    def _recall_context(self, query: str) -> list[Message]:
-        """Вернуть копию истории с recall-контекстом из прошлых сессий.
+    def _prepare_messages(self, query: str | None) -> list[Message]:
+        """Собрать сообщения запроса: история + каталог скиллов + recall.
 
-        Recall выполняется по тексту запроса (в ``__init__`` его нет —
-        релевантность не к чему привязать). Ищем в сессиях, **кроме текущей**:
-        её история и так целиком уходит в запрос. Найденные фрагменты
-        добавляются отдельным system-сообщением после системного промпта.
-        История агента и хранилище не изменяются.
+        Каталог скиллов (tier 1) и recall-фрагменты добавляются отдельными
+        system-сообщениями сразу после системного промпта, не изменяя
+        ``self.messages``, — повторные запросы не задваивают секции. Каталог
+        скиллов перечитывается с диска, поэтому сохранённый в этом же диалоге
+        скилл виден в следующем запросе.
         """
         messages = list(self.messages)
-        if self.memory is None or self.session_id is None:
+        extra: list[Message] = []
+        catalog = self._skill_catalog_message()
+        if catalog is not None:
+            extra.append(catalog)
+        if query:
+            recall = self._recall_message(query)
+            if recall is not None:
+                extra.append(recall)
+        if not extra:
             return messages
-        found = self.memory.search(query, exclude_session_id=self.session_id, limit=_RECALL_LIMIT)
+        last_system = max(
+            (index for index, message in enumerate(messages) if message.role == "system"),
+            default=-1,
+        )
+        messages[last_system + 1 : last_system + 1] = extra
+        return messages
+
+    def _skill_catalog_message(self) -> Message | None:
+        """Tier-1 каталог скиллов как system-сообщение (``None`` — скиллов нет)."""
+        if self._skill_store is None:
+            return None
+        catalog = self._skill_store.catalog()
+        if not catalog:
+            return None
+        return Message(role="system", content=catalog)
+
+    def _recall_message(self, query: str) -> Message | None:
+        """Найденные в прошлых сессиях фрагменты как system-сообщение.
+
+        Recall выполняется по тексту запроса (релевантность не к чему привязать
+        иначе). Ищем в сессиях, **кроме текущей**: её история и так целиком
+        уходит в запрос. История агента и хранилище не изменяются.
+        """
+        memory = self.memory
+        session_id = self.session_id
+        if memory is None or session_id is None:
+            return None
+        found = memory.search(query, exclude_session_id=session_id, limit=_RECALL_LIMIT)
         if not found:
-            return messages
+            return None
         recall_text = "Из прошлых сессий:\n" + "\n".join(
             f"- {message.content}" for message in found
         )
-        recall_message = Message(role="system", content=recall_text)
-        last_system = max(
-            (i for i, message in enumerate(messages) if message.role == "system"),
-            default=-1,
-        )
-        messages.insert(last_system + 1, recall_message)
-        return messages
+        return Message(role="system", content=recall_text)
 
     def _save_session(self) -> None:
         """Сохранить текущий диалог в хранилище (без system), если память задана."""

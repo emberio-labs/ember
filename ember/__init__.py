@@ -11,6 +11,7 @@ from ember.providers import (
     get_provider,
     register_provider,
 )
+from ember.skills import Skill
 from ember.types import (
     ChatRequest,
     ChatResponse,
@@ -39,6 +40,7 @@ __all__ = [
     "OpenAIProvider",
     "Provider",
     "ProviderError",
+    "Skill",
     "StreamChunk",
     "Tool",
     "ToolCall",
