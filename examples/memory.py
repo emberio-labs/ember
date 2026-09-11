@@ -1,9 +1,10 @@
 """Память агента: персистентные сессии и recall — исполняемый пример без API-ключей.
 
 Демонстрирует: диалог автоматически сохраняется в ``FileMemory``, пересозданный
-агент с тем же ``session_id`` продолжает беседу с сохранённой истории, а новая
+агент с тем же ``session_id`` продолжает беседу с сохранённой истории, новая
 сессия получает recall-контекст из прошлых разговоров (мок печатает его —
-видно, что модель «вспомнила» релевантное).
+видно, что модель «вспомнила» релевантное), а ``list_sessions`` отдаёт сводку
+по сессиям, не заставляя заглядывать в раскладку бэкенда.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ class MemoryMockProvider(Provider):
 
 
 def main() -> None:
-    """Прогнать сценарий: сессия → пересоздание агента → recall → reset."""
+    """Прогнать сценарий: сессия → пересоздание агента → recall → reset → список."""
     with tempfile.TemporaryDirectory(prefix="ember-memory-") as tmp:
         memory = FileMemory(Path(tmp))
         provider = MemoryMockProvider()
@@ -56,6 +57,15 @@ def main() -> None:
         # reset(): текущая сессия начинается заново (архив прошлых сессий цел).
         restored.reset()
         print("История после reset:", [m.content for m in restored.messages])
+
+        # Перечисление сессий: метаданные без знания раскладки бэкенда.
+        for info in memory.list_sessions():
+            updated = info.updated_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+            print(
+                f"Сессия {info.session_id}: {info.message_count} сообщений, "
+                f"{info.size_bytes} байт, изменена {updated}"
+            )
+
         print("Пример завершён.")
 
 
