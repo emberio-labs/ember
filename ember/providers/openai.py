@@ -22,6 +22,9 @@ _OPENAI_IMPORT_HINT = (
     "pip install 'emberio-labs-ember[openai]'"
 )
 
+#: Накопленный из дельт потока вызов инструмента до сборки в ToolCall.
+_PendingToolCall = dict[str, str]
+
 
 class OpenAIProvider(Provider):
     """Провайдер поверх официального OpenAI SDK.
@@ -112,14 +115,19 @@ class OpenAIProvider(Provider):
     def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
         """Получить ответ модели потоком — по одному фрагменту за раз.
 
-        Потоковый режим агрегирует только текст ответа; вызовы инструментов
-        (tool calls) в потоке не разбираются — используйте ``complete``.
+        Текст отдаётся по мере генерации. Вызовы инструментов SDK присылает
+        разрезанными на куски: ``id`` и имя функции приходят в первом
+        фрагменте, JSON-строка аргументов — накоплением в последующих, а
+        параллельные вызовы различаются полем ``index``. Провайдер склеивает
+        их и отдаёт одним финальным фрагментом с заполненным ``tool_calls``
+        (см. ``Provider.stream``).
 
         Args:
             request: Запрос к модели.
 
         Yields:
-            Фрагменты ответа модели.
+            Фрагменты ответа модели. Фрагменты без текста и без завершения
+            раунда (чистые дельты tool calls) не отдаются.
 
         Raises:
             ProviderError: Если OpenAI API вернул ошибку.
@@ -131,15 +139,67 @@ class OpenAIProvider(Provider):
         except self._openai_error as exc:
             raise ProviderError(f"Ошибка OpenAI API: {exc}") from exc
 
+        pending: dict[int, _PendingToolCall] = {}
+        last_model = request.model or self.model
         for chunk in chunks:
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
+            last_model = chunk.model
+            self._accumulate_tool_calls(getattr(choice.delta, "tool_calls", None), pending)
+            content = choice.delta.content or ""
+            if choice.finish_reason is not None and pending:
+                yield StreamChunk(
+                    delta=content,
+                    model=chunk.model,
+                    finish_reason=choice.finish_reason,
+                    tool_calls=self._tool_calls_from_pending(pending),
+                )
+                pending.clear()
+            elif content or choice.finish_reason is not None:
+                yield StreamChunk(
+                    delta=content,
+                    model=chunk.model,
+                    finish_reason=choice.finish_reason,
+                )
+        if pending:
+            # Сервер завершил поток без finish_reason, но вызовы накопились.
             yield StreamChunk(
-                delta=choice.delta.content or "",
-                model=chunk.model,
-                finish_reason=choice.finish_reason,
+                delta="",
+                model=last_model,
+                tool_calls=self._tool_calls_from_pending(pending),
             )
+
+    @staticmethod
+    def _accumulate_tool_calls(deltas: Any, pending: dict[int, _PendingToolCall]) -> None:
+        """Склеить фрагменты tool calls потока по индексам вызовов.
+
+        ``id`` и имя приходят один раз, аргументы — конкатенацией. Индекс
+        различает параллельные вызовы одного раунда, иначе их аргументы
+        слились бы в одну строку.
+        """
+        for delta in deltas or []:
+            entry = pending.setdefault(delta.index, {"id": "", "name": "", "arguments": ""})
+            if delta.id:
+                entry["id"] = delta.id
+            function = delta.function
+            if function is not None:
+                if function.name:
+                    entry["name"] = function.name
+                if function.arguments:
+                    entry["arguments"] += function.arguments
+
+    @staticmethod
+    def _tool_calls_from_pending(pending: dict[int, _PendingToolCall]) -> list[ToolCall]:
+        """Собрать готовые ToolCall из накопленных фрагментов (в порядке вызовов)."""
+        return [
+            ToolCall(
+                id=entry["id"],
+                name=entry["name"],
+                arguments=entry["arguments"] or "{}",
+            )
+            for _, entry in sorted(pending.items())
+        ]
 
     def _build_params(self, request: ChatRequest) -> dict[str, Any]:
         """Собрать параметры для вызова chat.completions.create (без stream)."""
