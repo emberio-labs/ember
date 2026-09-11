@@ -5,9 +5,11 @@
 ``.json``). Запись атомарная: сначала во временный файл, затем
 переименование — падение в середине записи не оставит битый файл сессии.
 
-``session_id`` санитизируется для имени файла (см. ``_sanitize_session_id``).
-Поиск (``search``) — bag-of-words overlap по user/assistant-сообщениям всех
-сессий: без LLM и эмбеддингов, достаточно для небольших локальных архивов.
+``session_id`` проверяется (``validate_session_id``) и совпадает с именем файла
+без расширения — поэтому каталог сам служит списком сессий
+(``list_sessions``). Поиск (``search``) — bag-of-words overlap по
+user/assistant-сообщениям всех сессий: без LLM и эмбеддингов, достаточно
+для небольших локальных архивов.
 """
 
 from __future__ import annotations
@@ -16,10 +18,11 @@ import json
 import os
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ember.memory.base import Memory
+from ember.memory.base import Memory, SessionInfo, is_valid_session_id, validate_session_id
 from ember.types import Message, ToolCall
 
 #: Слова короче этой длины — только шум для поиска (предлоги, союзы, артикли).
@@ -66,23 +69,12 @@ _STOP_WORDS: frozenset[str] = frozenset(
 )
 
 _WORD_RE = re.compile(r"[a-zа-яё0-9]+")
-#: Допустимые символы в имени файла сессии; остальное заменяется на "_".
-_SESSION_ID_RE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def _tokenize(text: str) -> set[str]:
     """Разбить текст на значимые слова: lowercase, без пунктуации и стоп-слов."""
     words = _WORD_RE.findall(text.lower())
     return {word for word in words if len(word) >= _MIN_WORD_LENGTH and word not in _STOP_WORDS}
-
-
-def _sanitize_session_id(session_id: str) -> str:
-    """Привести ``session_id`` к безопасному имени файла внутри директории.
-
-    Любые символы вне ``[A-Za-z0-9_.-]`` заменяются на ``_`` — так ``session_id``
-    не может «убежать» за пределы директории хранилища (например, через ``../``).
-    """
-    return _SESSION_ID_RE.sub("_", session_id)
 
 
 def _tool_call_to_dict(call: ToolCall) -> dict[str, Any]:
@@ -121,6 +113,12 @@ def _message_from_dict(data: dict[str, Any]) -> Message:
     )
 
 
+def _count_messages(path: Path) -> int:
+    """Число сообщений в файле сессии — непустых строк JSONL."""
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
 class FileMemory(Memory):
     """Файловая реализация ``Memory``: один JSONL-файл на сессию.
 
@@ -129,9 +127,8 @@ class FileMemory(Memory):
     ``.json``). Запись атомарная: сначала во временный файл, затем
     переименование — падение в середине записи не оставит битый файл сессии.
 
-    ``session_id`` санитизируется для имени файла (см. ``_sanitize_session_id``).
-    Поиск (``search``) — bag-of-words overlap по user/assistant-сообщениям всех
-    сессий: без LLM и эмбеддингов, достаточно для небольших локальных архивов.
+    ``session_id`` проверяется (``validate_session_id``); непригодный id —
+    ``InvalidSessionIdError``.
     """
 
     def __init__(self, directory: str | Path) -> None:
@@ -145,12 +142,8 @@ class FileMemory(Memory):
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, session_id: str) -> Path:
-        if not session_id:
-            raise ValueError("session_id не может быть пустым")
-        safe = _sanitize_session_id(session_id)
-        if not safe:
-            raise ValueError(f"session_id {session_id!r} не даёт допустимого имени файла")
-        return self.directory / f"{safe}.json"
+        """Путь к файлу сессии: ``session_id`` — это имя файла без расширения."""
+        return self.directory / f"{validate_session_id(session_id)}.json"
 
     def load_session(self, session_id: str) -> list[Message]:
         path = self._path_for(session_id)
@@ -182,6 +175,9 @@ class FileMemory(Memory):
         exclude_session_id: str | None = None,
         limit: int = 5,
     ) -> list[Message]:
+        """Найти сообщения по прошлым сессиям (контракт — ``Memory.search``)."""
+        if exclude_session_id is not None:
+            validate_session_id(exclude_session_id)
         query_words = _tokenize(query)
         if not query_words or limit <= 0:
             return []
@@ -198,6 +194,36 @@ class FileMemory(Memory):
         scored.sort(key=lambda item: item[0], reverse=True)
         return [message for _, message in scored[:limit]]
 
+    def list_sessions(self) -> list[SessionInfo]:
+        """Перечислить сессии каталога (контракт — ``Memory.list_sessions``).
+
+        Число сообщений берётся по непустым строкам файла, без разбора
+        содержимого: битый JSON одной сессии не мешает перечислить остальные.
+        """
+        infos: list[SessionInfo] = []
+        for path in self._session_paths():
+            stat = path.stat()
+            infos.append(
+                SessionInfo(
+                    session_id=path.stem,
+                    message_count=_count_messages(path),
+                    updated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                    size_bytes=stat.st_size,
+                )
+            )
+        # Свежие первыми; при равном времени — по id, чтобы порядок был стабильным.
+        infos.sort(key=lambda info: info.session_id)
+        infos.sort(key=lambda info: info.updated_at, reverse=True)
+        return infos
+
+    def _session_paths(self) -> list[Path]:
+        """Файлы сессий каталога: имя файла без расширения и есть ``session_id``.
+
+        Посторонние ``*.json`` пропускаются: адресовать их через публичный API
+        нельзя, а на легаси-файлах ``load_session`` поднимает ошибку.
+        """
+        return [path for path in self.directory.glob("*.json") if is_valid_session_id(path.stem)]
+
     def _session_ids(self) -> list[str]:
-        """Имена сессий в директории (по именам файлов, без расширения)."""
-        return sorted(path.stem for path in self.directory.glob("*.json"))
+        """Id сессий в директории, по возрастанию."""
+        return sorted(path.stem for path in self._session_paths())

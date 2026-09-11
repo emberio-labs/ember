@@ -11,7 +11,8 @@
 - Инструменты/функции для модели (tool calling)
 - Подключение внешних инструментов по MCP (Model Context Protocol)
 - Скиллы агента по стандарту Agent Skills: каталог в промпте, загрузка тела по требованию
-- Персистентная память агента: диалоги между сессиями и кросс-сессионный recall
+- Персистентная память агента: диалоги между сессиями, перечисление сессий
+  с метаданными и кросс-сессионный recall
 - Минимальное количество кода для старта
 
 > ⚠️ Проект на ранней стадии разработки. API активно меняется.
@@ -146,6 +147,9 @@ print([m.content for m in restored.messages])
 - `memory` и `session_id` задаются **вместе**: без `session_id` диалог некуда
   сохранять. `FileMemory` хранит каждую сессию в отдельном JSONL-файле
   `<directory>/<session_id>.json`.
+- `session_id` — переносимый идентификатор: латинские буквы, цифры, `_`, `-`
+  и `.` (точка — не первым и не последним символом), до 128 символов.
+  Непригодный id отклоняется с `InvalidSessionIdError`.
 - При создании агент загружает историю сессии и продолжает диалог с неё.
   В хранилище пишется только «разговорная» часть (user/assistant/tool) —
   system-промпт остаётся конфигурацией агента и ставится первым при создании.
@@ -158,9 +162,29 @@ print([m.content for m in restored.messages])
   в запрос отдельным system-сообщением «Из прошлых сессий: ...». История
   и хранилище при этом не изменяются.
 
+Сохранённые сессии можно перечислить — не заглядывая в раскладку бэкенда:
+
+```python
+from ember import FileMemory
+
+memory = FileMemory("/tmp/ember-memory")
+for info in memory.list_sessions():
+    print(info.session_id, info.message_count, info.updated_at)
+# user-42 2 2026-09-11 04:25:58+00:00
+```
+
+`list_sessions()` возвращает `SessionInfo`: `session_id`, `message_count`
+(число сообщений), `updated_at` (время последнего изменения, UTC) и
+`size_bytes` (объём сессии в байтах; `None`, если бэкенд его не знает).
+Свежие сессии идут первыми, при равном времени — по возрастанию `session_id`,
+так что таблицу можно печатать как есть.
+
 Своё хранилище (Redis, Postgres, SQLite...) подключить просто: реализуйте
-`Memory` — `load_session`/`save_session`/`search`/`delete_session` — и передайте
-в `Agent`. Полный исполняемый пример — [`examples/memory.py`](examples/memory.py).
+`Memory` — `load_session`/`save_session`/`search`/`list_sessions`/
+`delete_session` — и передайте
+в `Agent`. Если у хранилища ограничения на символы в id, проверяйте его через
+`validate_session_id` и бросайте `InvalidSessionIdError`.
+Полный исполняемый пример — [`examples/memory.py`](examples/memory.py).
 
 ### Инструменты (tool calling)
 

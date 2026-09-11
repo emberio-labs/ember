@@ -2,7 +2,7 @@
 
 from ember.agent import Agent, ToolCallLimitError
 from ember.mcp import MCPClient, MCPError
-from ember.memory import FileMemory, Memory
+from ember.memory import FileMemory, InvalidSessionIdError, Memory, SessionInfo
 from ember.providers import (
     MockProvider,
     OpenAIProvider,
@@ -32,6 +32,7 @@ __all__ = [
     "ChatResponse",
     "FileMemory",
     "FunctionTool",
+    "InvalidSessionIdError",
     "MCPClient",
     "MCPError",
     "Memory",
@@ -40,6 +41,7 @@ __all__ = [
     "OpenAIProvider",
     "Provider",
     "ProviderError",
+    "SessionInfo",
     "Skill",
     "StreamChunk",
     "Tool",

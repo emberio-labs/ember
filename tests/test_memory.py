@@ -1,11 +1,14 @@
 """Тесты памяти агента: FileMemory (round-trip, поиск) и Agent с memory/session_id."""
 
+import os
 from collections.abc import Iterator
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
-from ember import Agent, FileMemory, Memory, MockProvider
+from ember import Agent, FileMemory, InvalidSessionIdError, Memory, MockProvider
+from ember.memory import validate_session_id
 from ember.providers.base import Provider
 from ember.types import ChatRequest, ChatResponse, Message, StreamChunk, ToolCall, Usage
 
@@ -89,7 +92,7 @@ def test_file_memory_round_trip(tmp_path: Path) -> None:
 def test_file_memory_load_missing_session_returns_empty(tmp_path: Path) -> None:
     memory = FileMemory(tmp_path)
 
-    assert memory.load_session("не-существует") == []
+    assert memory.load_session("missing") == []
 
 
 def test_file_memory_save_empty_session(tmp_path: Path) -> None:
@@ -110,19 +113,17 @@ def test_file_memory_delete_session(tmp_path: Path) -> None:
     memory.delete_session("temp")
 
 
-def test_file_memory_sanitizes_session_id(tmp_path: Path) -> None:
-    """Опасный session_id не выходит за пределы директории хранилища."""
+@pytest.mark.parametrize("session_id", ["../outside", "a/b", "/etc/passwd", "..", "."])
+def test_file_memory_rejects_session_id_escaping_directory(tmp_path: Path, session_id: str) -> None:
+    """id, пытающийся выйти за пределы каталога, — отказ, а не санитизация."""
     memory = FileMemory(tmp_path)
-    message = Message(role="user", content="секрет")
 
-    memory.save_session("../outside", [message])
+    with pytest.raises(InvalidSessionIdError):
+        memory.save_session(session_id, [Message(role="user", content="секрет")])
 
-    # Слэши заменяются на "_": файл создаётся строго внутри директории.
-    files = list(tmp_path.iterdir())
-    assert files == [tmp_path / ".._outside.json"]
+    assert list(tmp_path.iterdir()) == []
     assert not (tmp_path.parent / ".._outside.json").exists()
-    # Загрузка по исходному имени возвращает сохранённое.
-    assert memory.load_session("../outside") == [message]
+    assert not (tmp_path.parent / "outside.json").exists()
 
 
 def test_file_memory_search_ranks_by_overlap(tmp_path: Path) -> None:
@@ -279,3 +280,164 @@ def test_agent_stream_run_saves_history(tmp_path: Path) -> None:
 
     assert "".join(chunks) == "Привет мир"
     assert [m.content for m in memory.load_session("s")] == ["Привет", "Привет мир"]
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["", ".hidden", "abc.", "a b", "a#b", "ручная", "café", "x" * 129],
+)
+def test_file_memory_rejects_unportable_session_id(tmp_path: Path, session_id: str) -> None:
+    """Нелатинские и «составные» id отклоняются явно — раньше портили данные молча."""
+    memory = FileMemory(tmp_path)
+
+    with pytest.raises(InvalidSessionIdError):
+        memory.save_session(session_id, [Message(role="user", content="секрет")])
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_file_memory_invalid_session_id_fails_in_every_method(tmp_path: Path) -> None:
+    """Проверка одна на весь API: load/delete/search тоже отказывают."""
+    memory = FileMemory(tmp_path)
+    memory.save_session("demo", [Message(role="user", content="привет")])
+
+    with pytest.raises(InvalidSessionIdError):
+        memory.load_session("ручная")
+    with pytest.raises(InvalidSessionIdError):
+        memory.delete_session("ручная")
+    with pytest.raises(InvalidSessionIdError):
+        memory.search("привет", exclude_session_id="ручная")
+
+    # Сессия с валидным id не пострадала.
+    assert [m.content for m in memory.load_session("demo")] == ["привет"]
+
+
+def test_file_memory_similar_ids_no_longer_collide(tmp_path: Path) -> None:
+    """Регрессия #44: id, схлопывавшиеся в одно имя файла, больше не затирают друг друга."""
+    memory = FileMemory(tmp_path)
+    memory.save_session("a-b", [Message(role="user", content="первый")])
+    memory.save_session("a_b", [Message(role="user", content="второй")])
+
+    assert [m.content for m in memory.load_session("a-b")] == ["первый"]
+    assert [m.content for m in memory.load_session("a_b")] == ["второй"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["a-b.json", "a_b.json"]
+
+    # «ручная» и «ручной» раньше давали один "______.json" — теперь обе отклоняются.
+    for bad_id in ("ручная", "ручной"):
+        with pytest.raises(InvalidSessionIdError):
+            memory.save_session(bad_id, [Message(role="user", content="потеряно")])
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["a-b.json", "a_b.json"]
+
+
+@pytest.mark.parametrize("session_id", ["demo", "user-42", "a_b", "2026.09.10", "A"])
+def test_file_memory_accepts_portable_session_id(tmp_path: Path, session_id: str) -> None:
+    """Допустимый id и есть имя файла без расширения — предсказуемо и обратимо."""
+    memory = FileMemory(tmp_path)
+    memory.save_session(session_id, [Message(role="user", content="привет")])
+
+    assert (tmp_path / f"{session_id}.json").exists()
+    assert [m.content for m in memory.load_session(session_id)] == ["привет"]
+
+
+def test_file_memory_search_ignores_foreign_files(tmp_path: Path) -> None:
+    """Посторонние и легаси-файлы (имена не-ids) не ломают поиск и не видны в нём."""
+    memory = FileMemory(tmp_path)
+    memory.save_session("demo", [Message(role="user", content="люблю питон")])
+    legacy = '{"role": "user", "content": "люблю питон"}\n'
+    (tmp_path / ".._outside.json").write_text(legacy, encoding="utf-8")
+    (tmp_path / "заметки.json").write_text(legacy, encoding="utf-8")
+    (tmp_path / "notes.txt").write_text(legacy, encoding="utf-8")
+
+    assert [m.content for m in memory.search("питон")] == ["люблю питон"]
+
+
+def test_agent_validates_session_id_at_construction(tmp_path: Path) -> None:
+    """Непригодный session_id рвётся сразу при создании агента, а не при первом run()."""
+    memory = FileMemory(tmp_path)
+
+    with pytest.raises(InvalidSessionIdError):
+        Agent(MockProvider(), memory=memory, session_id="ручная")
+
+
+def test_invalid_session_id_error_is_value_error() -> None:
+    """Обратная совместимость: прежний ``except ValueError`` продолжает ловить."""
+    with pytest.raises(ValueError):
+        validate_session_id("ручная")
+    assert validate_session_id("user-42") == "user-42"
+
+
+def test_memory_list_sessions_is_part_of_interface() -> None:
+    """Перечисление сессий обязательно для реализаций: потребитель не читает файлы сам."""
+    assert "list_sessions" in Memory.__abstractmethods__
+
+
+def test_file_memory_list_sessions_empty(tmp_path: Path) -> None:
+    assert FileMemory(tmp_path).list_sessions() == []
+
+
+def test_file_memory_list_sessions_returns_metadata(tmp_path: Path) -> None:
+    """Сводка несёт id, число сообщений, время изменения (UTC) и размер."""
+    memory = FileMemory(tmp_path)
+    memory.save_session(
+        "demo",
+        [
+            Message(role="user", content="Какая погода?"),
+            Message(role="tool", content="+18 °C", tool_call_id="call_1"),
+        ],
+    )
+    memory.save_session("empty", [])
+
+    infos = {info.session_id: info for info in memory.list_sessions()}
+
+    assert set(infos) == {"demo", "empty"}
+    assert infos["demo"].message_count == 2
+    assert infos["empty"].message_count == 0
+    assert infos["demo"].updated_at.tzinfo == timezone.utc
+    assert infos["demo"].size_bytes == (tmp_path / "demo.json").stat().st_size
+    assert infos["empty"].size_bytes == 0
+
+
+def test_file_memory_list_sessions_newest_first(tmp_path: Path) -> None:
+    """Порядок задаёт интерфейс: свежие первыми, при равном времени — по id."""
+    memory = FileMemory(tmp_path)
+    for session_id in ("alpha", "beta", "gamma"):
+        memory.save_session(session_id, [Message(role="user", content=session_id)])
+    for session_id, moment in (
+        ("alpha", 1_700_000_000.0),
+        ("beta", 1_700_000_500.0),
+        ("gamma", 1_700_000_500.0),
+    ):
+        os.utime(tmp_path / f"{session_id}.json", (moment, moment))
+
+    assert [info.session_id for info in memory.list_sessions()] == ["beta", "gamma", "alpha"]
+
+
+def test_file_memory_list_sessions_after_delete(tmp_path: Path) -> None:
+    memory = FileMemory(tmp_path)
+    memory.save_session("gone", [Message(role="user", content="привет")])
+
+    memory.delete_session("gone")
+
+    assert memory.list_sessions() == []
+
+
+def test_file_memory_list_sessions_ignores_foreign_files(tmp_path: Path) -> None:
+    """Посторонние и легаси-файлы не становятся «сессиями» в списке."""
+    memory = FileMemory(tmp_path)
+    memory.save_session("demo", [Message(role="user", content="привет")])
+    (tmp_path / ".._outside.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "заметки.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("{}\n", encoding="utf-8")
+
+    assert [info.session_id for info in memory.list_sessions()] == ["demo"]
+
+
+def test_file_memory_list_sessions_survives_broken_file(tmp_path: Path) -> None:
+    """Список не разбирает сообщения: битый JSON не мешает перечислению."""
+    memory = FileMemory(tmp_path)
+    (tmp_path / "broken.json").write_text('{"role": "user"\n', encoding="utf-8")
+
+    infos = memory.list_sessions()
+
+    assert [info.session_id for info in infos] == ["broken"]
+    assert infos[0].message_count == 1
