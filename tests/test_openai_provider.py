@@ -527,6 +527,4 @@ def test_openai_stream_keeps_text_preamble_before_tool_calls(fake_client: FakeCl
     chunks = list(provider.stream(_request()))
 
     assert "".join(c.delta for c in chunks) == "Сейчас посмотрю. "
-    assert chunks[-1].tool_calls == [
-        ToolCall(id="call_1", name="get_weather", arguments="{}")
-    ]
+    assert chunks[-1].tool_calls == [ToolCall(id="call_1", name="get_weather", arguments="{}")]
