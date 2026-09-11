@@ -12,6 +12,8 @@
 system-сообщений.
 
 ``session_id`` — переносимый идентификатор (см. ``validate_session_id``).
+``list_sessions`` возвращает ``SessionInfo``: список сессий с метаданными,
+чтобы потребителю не приходилось знать раскладку бэкенда.
 ``FileMemory`` использует его как имя файла сессии, поэтому непригодный id —
 это ``InvalidSessionIdError``, а не молчаливая подстановка символов.
 """
@@ -19,6 +21,7 @@ system-сообщений.
 from ember.memory.base import (
     InvalidSessionIdError,
     Memory,
+    SessionInfo,
     is_valid_session_id,
     validate_session_id,
 )
@@ -28,6 +31,7 @@ __all__ = [
     "FileMemory",
     "InvalidSessionIdError",
     "Memory",
+    "SessionInfo",
     "is_valid_session_id",
     "validate_session_id",
 ]

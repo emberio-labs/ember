@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
 from ember.types import Message
 
@@ -81,6 +83,27 @@ def is_valid_session_id(session_id: str) -> bool:
     return True
 
 
+@dataclass(frozen=True, slots=True)
+class SessionInfo:
+    """Сводка о сессии — элемент результата ``Memory.list_sessions``.
+
+    Снимок состояния на момент вызова: изменение полей у вызывающего на
+    хранилище не влияет, повторный вызов даёт свежие данные.
+
+    Attributes:
+        session_id: Идентификатор сессии — годится для ``load_session``.
+        message_count: Сколько сообщений сохранено в сессии.
+        updated_at: Время последнего изменения сессии (UTC, aware-datetime).
+        size_bytes: Объём сессии в байтах, если хранилище его знает
+            (``None`` — размер неприменим или неизвестен).
+    """
+
+    session_id: str
+    message_count: int
+    updated_at: datetime
+    size_bytes: int | None = None
+
+
 class Memory(ABC):
     """Хранилище диалогов агента между сессиями.
 
@@ -95,6 +118,10 @@ class Memory(ABC):
     становится именем файла или ключом с ограниченным набором символов,
     обязаны проверять его через ``validate_session_id`` и бросать
     ``InvalidSessionIdError``.
+
+    ``list_sessions`` входит в интерфейс, а не живёт отдельным хелпером: выбор
+    сессии — задача потребителя (CLI, интерфейс), и он не должен знать
+    раскладку конкретного бэкенда.
     """
 
     @abstractmethod
@@ -145,5 +172,18 @@ class Memory(ABC):
 
         Raises:
             InvalidSessionIdError: Если ``session_id`` недопустим (см. реализацию).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_sessions(self) -> list[SessionInfo]:
+        """Перечислить сохранённые сессии: сначала недавно изменённые.
+
+        Порядок результата — часть контракта: потребитель (например, CLI
+        с таблицей сессий) показывает его как есть. При равном времени
+        изменения сессии упорядочены по ``session_id`` по возрастанию.
+
+        Returns:
+            Сводки сессий; пустой список, если сессий ещё нет.
         """
         raise NotImplementedError

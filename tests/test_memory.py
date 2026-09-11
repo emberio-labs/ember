@@ -1,6 +1,8 @@
 """Тесты памяти агента: FileMemory (round-trip, поиск) и Agent с memory/session_id."""
 
+import os
 from collections.abc import Iterator
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -362,3 +364,80 @@ def test_invalid_session_id_error_is_value_error() -> None:
     with pytest.raises(ValueError):
         validate_session_id("ручная")
     assert validate_session_id("user-42") == "user-42"
+
+
+def test_memory_list_sessions_is_part_of_interface() -> None:
+    """Перечисление сессий обязательно для реализаций: потребитель не читает файлы сам."""
+    assert "list_sessions" in Memory.__abstractmethods__
+
+
+def test_file_memory_list_sessions_empty(tmp_path: Path) -> None:
+    assert FileMemory(tmp_path).list_sessions() == []
+
+
+def test_file_memory_list_sessions_returns_metadata(tmp_path: Path) -> None:
+    """Сводка несёт id, число сообщений, время изменения (UTC) и размер."""
+    memory = FileMemory(tmp_path)
+    memory.save_session(
+        "demo",
+        [
+            Message(role="user", content="Какая погода?"),
+            Message(role="tool", content="+18 °C", tool_call_id="call_1"),
+        ],
+    )
+    memory.save_session("empty", [])
+
+    infos = {info.session_id: info for info in memory.list_sessions()}
+
+    assert set(infos) == {"demo", "empty"}
+    assert infos["demo"].message_count == 2
+    assert infos["empty"].message_count == 0
+    assert infos["demo"].updated_at.tzinfo == timezone.utc
+    assert infos["demo"].size_bytes == (tmp_path / "demo.json").stat().st_size
+    assert infos["empty"].size_bytes == 0
+
+
+def test_file_memory_list_sessions_newest_first(tmp_path: Path) -> None:
+    """Порядок задаёт интерфейс: свежие первыми, при равном времени — по id."""
+    memory = FileMemory(tmp_path)
+    for session_id in ("alpha", "beta", "gamma"):
+        memory.save_session(session_id, [Message(role="user", content=session_id)])
+    for session_id, moment in (
+        ("alpha", 1_700_000_000.0),
+        ("beta", 1_700_000_500.0),
+        ("gamma", 1_700_000_500.0),
+    ):
+        os.utime(tmp_path / f"{session_id}.json", (moment, moment))
+
+    assert [info.session_id for info in memory.list_sessions()] == ["beta", "gamma", "alpha"]
+
+
+def test_file_memory_list_sessions_after_delete(tmp_path: Path) -> None:
+    memory = FileMemory(tmp_path)
+    memory.save_session("gone", [Message(role="user", content="привет")])
+
+    memory.delete_session("gone")
+
+    assert memory.list_sessions() == []
+
+
+def test_file_memory_list_sessions_ignores_foreign_files(tmp_path: Path) -> None:
+    """Посторонние и легаси-файлы не становятся «сессиями» в списке."""
+    memory = FileMemory(tmp_path)
+    memory.save_session("demo", [Message(role="user", content="привет")])
+    (tmp_path / ".._outside.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "заметки.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("{}\n", encoding="utf-8")
+
+    assert [info.session_id for info in memory.list_sessions()] == ["demo"]
+
+
+def test_file_memory_list_sessions_survives_broken_file(tmp_path: Path) -> None:
+    """Список не разбирает сообщения: битый JSON не мешает перечислению."""
+    memory = FileMemory(tmp_path)
+    (tmp_path / "broken.json").write_text('{"role": "user"\n', encoding="utf-8")
+
+    infos = memory.list_sessions()
+
+    assert [info.session_id for info in infos] == ["broken"]
+    assert infos[0].message_count == 1
