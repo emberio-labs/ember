@@ -31,10 +31,12 @@ class Agent:
     Хранит историю диалога и системный промпт, формирует ``ChatRequest``
     и возвращает текстовый ответ модели.
 
-    Если агенту заданы инструменты (``tools``), ``run()`` исполняет
-    запрошенные моделью вызовы в цикле: результат каждого инструмента
-    возвращается модели как tool-сообщение, и диалог продолжается до тех
-    пор, пока модель не даст финальный текстовый ответ.
+    Если агенту заданы инструменты (``tools``), ``run()`` и ``stream_run()``
+    исполняют запрошенные моделью вызовы в цикле: результат каждого
+    инструмента возвращается модели как tool-сообщение, и диалог продолжается
+    до тех пор, пока модель не даст финальный текстовый ответ. ``stream_run()``
+    при этом отдаёт текст по мере генерации — как промежуточных реплик, так и
+    финального ответа (различить их в одном потоке строк нельзя).
 
     Если задан ``skills_dirs``, агент работает со скиллами по стандарту
     Agent Skills: каталоги сканируются (порядок = приоритет), в системный
@@ -58,8 +60,8 @@ class Agent:
         tools: Инструменты, доступные модели (описание + функция). Включает
             встроенные инструменты скиллов, если задан ``skills_dirs``.
         max_tool_steps: Максимум раундов исполнения инструментов за один
-            ``run()``. Один раунд — один запрос к модели и исполнение всех
-            запрошенных в ответе вызовов.
+            ``run()``/``stream_run()``. Один раунд — один запрос к модели и
+            исполнение всех запрошенных в ответе вызовов.
         memory: Хранилище диалогов (``None`` — история только в памяти агента).
         session_id: Идентификатор текущей сессии. Задаётся вместе с ``memory``:
             без хранилища ``session_id`` некуда сохранять диалог.
@@ -152,16 +154,77 @@ class Agent:
                 if not assistant_message.tool_calls:
                     return assistant_message.content
                 if tool_steps >= self.max_tool_steps:
-                    names = ", ".join(call.name for call in assistant_message.tool_calls)
-                    raise ToolCallLimitError(
-                        f"Модель не завершила диалог: превышен лимит раундов tool calling "
-                        f"({self.max_tool_steps}). Модель продолжает запрашивать инструменты "
-                        f"({names or 'без имён'}) вместо финального текстового ответа."
-                    )
+                    raise self._tool_call_limit_error(assistant_message.tool_calls)
                 self._execute_tool_calls(assistant_message.tool_calls)
                 tool_steps += 1
         finally:
             self._save_session()
+
+    def stream_run(self, user_input: str) -> Iterator[str]:
+        """Отправить сообщение пользователя и получить ответ потоком.
+
+        Поведение аналогично ``run``, но текст отдаётся по фрагментам по мере
+        генерации, а не одним куском в конце. Если у агента заданы инструменты,
+        ``stream_run()`` исполняет вызовы в цикле точно так же, как ``run()``:
+        результаты возвращаются модели tool-сообщениями, и генерация
+        продолжается до финального текстового ответа.
+
+        Потребитель получает дельты **всех** раундов подряд: определить,
+        финальный это ответ или промежуточная реплика перед вызовом
+        инструмента, по потоку строк нельзя. Пауза на время исполнения
+        инструмента наружу никак не сигнализируется.
+
+        Если задана память (``memory`` + ``session_id``), перед первым запросом
+        выполняется recall по ``user_input``, а по завершении — успешном,
+        с исключением или при обрыве потока — диалог сохраняется в хранилище.
+
+        Args:
+            user_input: Текст сообщения пользователя.
+
+        Yields:
+            Фрагменты текста ответа модели — из всех раундов диалога.
+
+        Raises:
+            ToolCallLimitError: Если модель не завершила диалог за
+                ``max_tool_steps`` раундов исполнения инструментов.
+        """
+        self.messages.append(Message(role="user", content=user_input))
+        tool_steps = 0
+        try:
+            while True:
+                recall_query = user_input if tool_steps == 0 else None
+                round_text = ""
+                tool_calls: list[ToolCall] | None = None
+                for chunk in self.provider.stream(
+                    self._request(recall_query=recall_query, stream=True)
+                ):
+                    if chunk.delta:
+                        round_text += chunk.delta
+                        yield chunk.delta
+                    if chunk.tool_calls:
+                        tool_calls = chunk.tool_calls
+                # Текст раунда сохраняем в историю так же, как это делает run()
+                # с ответом провайдера: даже если раунд закончился вызовами.
+                self.messages.append(
+                    Message(role="assistant", content=round_text, tool_calls=tool_calls)
+                )
+                if not tool_calls:
+                    return
+                if tool_steps >= self.max_tool_steps:
+                    raise self._tool_call_limit_error(tool_calls)
+                self._execute_tool_calls(tool_calls)
+                tool_steps += 1
+        finally:
+            self._save_session()
+
+    def _tool_call_limit_error(self, tool_calls: list[ToolCall]) -> ToolCallLimitError:
+        """Собрать ошибку о превышении лимита раундов (общую для run и stream_run)."""
+        names = ", ".join(call.name for call in tool_calls)
+        return ToolCallLimitError(
+            f"Модель не завершила диалог: превышен лимит раундов tool calling "
+            f"({self.max_tool_steps}). Модель продолжает запрашивать инструменты "
+            f"({names or 'без имён'}) вместо финального текстового ответа."
+        )
 
     def _execute_tool_calls(self, tool_calls: list[ToolCall]) -> None:
         """Исполнить инструменты и добавить результаты в историю как tool-сообщения.
@@ -201,45 +264,6 @@ class Agent:
             return json.dumps(result, ensure_ascii=False, default=str)
         return str(result)
 
-    def stream_run(self, user_input: str) -> Iterator[str]:
-        """Отправить сообщение пользователя и получить ответ потоком.
-
-        Поведение аналогично ``run``, но ответ возвращается по одному
-        фрагменту за раз. По завершении полный ответ попадает в историю,
-        а при заданной памяти — и в хранилище (в том числе при обрыве потока).
-
-        Args:
-            user_input: Текст сообщения пользователя.
-
-        Yields:
-            Фрагменты текста ответа модели.
-
-        Raises:
-            ValueError: Если у агента заданы инструменты (включая встроенные
-                инструменты скиллов) — потоковый ответ не разбирает
-                ``tool_calls``, используйте ``run()``.
-        """
-        if self.tools:
-            raise ValueError(
-                "stream_run() не поддерживает инструменты: потоковый ответ провайдера "
-                "не разбирает tool_calls. Используйте run() для сценариев с tools."
-            )
-        self.messages.append(Message(role="user", content=user_input))
-        request = ChatRequest(
-            messages=self._prepare_messages(user_input),
-            model=self.model or "",
-            stream=True,
-        )
-        full_text = ""
-        try:
-            for chunk in self.provider.stream(request):
-                full_text += chunk.delta
-                yield chunk.delta
-            self.messages.append(Message(role="assistant", content=full_text))
-        finally:
-            # Сохраняем и при обрыве потока/исключении: диалог не теряется.
-            self._save_session()
-
     def reset(self) -> None:
         """Начать диалог заново: очистить историю, оставив только system-промпт.
 
@@ -251,7 +275,7 @@ class Agent:
         self.messages = [system] if system is not None else []
         self._save_session()
 
-    def _request(self, recall_query: str | None = None) -> ChatRequest:
+    def _request(self, recall_query: str | None = None, *, stream: bool = False) -> ChatRequest:
         # Копия списка: запрос не должен разделять состояние с историей агента,
         # иначе последующие append в self.messages мутируют переданный запрос.
         # Пустая model означает «модель провайдера по умолчанию»: адаптеры
@@ -259,6 +283,7 @@ class Agent:
         return ChatRequest(
             messages=self._prepare_messages(recall_query),
             model=self.model or "",
+            stream=stream,
             tools=self.tools,
         )
 

@@ -329,16 +329,6 @@ def test_run_without_tools_works_as_before() -> None:
     assert provider.requests[0].tools is None
 
 
-def test_stream_run_with_tools_raises_value_error() -> None:
-    agent = Agent(
-        ScriptedProvider(script=[Message(role="assistant", content="текст")]),
-        tools=[_function_tool("get_weather", lambda: "ok", {"type": "object"})],
-    )
-
-    with pytest.raises(ValueError, match="stream_run"):
-        list(agent.stream_run("Привет"))
-
-
 def test_duplicate_tool_names_raise_value_error() -> None:
     provider = ScriptedProvider(script=[Message(role="assistant", content="ответ")])
     tools = [
