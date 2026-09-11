@@ -432,9 +432,43 @@ def test_user_save_skill_tool_allowed_without_skills() -> None:
     assert Agent(provider, tools=[user_tool]).tools == [user_tool]
 
 
-def test_stream_run_with_skills_raises(tmp_path: Path) -> None:
-    provider = ScriptedProvider([Message(role="assistant", content="ок")])
+def test_stream_run_with_skills_executes_read_skill(tmp_path: Path) -> None:
+    """Инструменты скиллов (#16) работают и в потоковом режиме."""
+    _write_skill(tmp_path, "code-review", body="## Шаги")
+
+    class StreamingProvider(Provider):
+        rounds = [
+            [
+                StreamChunk(
+                    delta="",
+                    model="s",
+                    finish_reason="tool_calls",
+                    tool_calls=[
+                        ToolCall(id="c1", name="read_skill", arguments='{"name": "code-review"}')
+                    ],
+                )
+            ],
+            [StreamChunk(delta="Готово", model="s", finish_reason="stop")],
+        ]
+
+        def __init__(self) -> None:
+            self.requests: list[ChatRequest] = []
+
+        def complete(self, request: ChatRequest) -> ChatResponse:
+            raise AssertionError("complete не используется в потоковом тесте")
+
+        def stream(self, request: ChatRequest) -> Iterator[StreamChunk]:
+            self.requests.append(request)
+            yield from self.rounds[len(self.requests) - 1]
+
+    provider = StreamingProvider()
     agent = Agent(provider, skills_dirs=[tmp_path])
 
-    with pytest.raises(ValueError, match="stream_run"):
-        list(agent.stream_run("Привет"))
+    assert "".join(agent.stream_run("Сделай ревью")) == "Готово"
+
+    tool_messages = [m for m in agent.messages if m.role == "tool"]
+    assert tool_messages[0].content == "## Шаги"
+    assert [tool.name for tool in provider.requests[0].tools or []] == [
+        "read_skill",
+        "save_skill",
+    ]

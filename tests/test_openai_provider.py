@@ -118,6 +118,38 @@ def _chunk(
     return SimpleNamespace(choices=choices, model=model)
 
 
+def _tool_delta(
+    index: int,
+    *,
+    id: str | None = None,
+    name: str | None = None,
+    arguments: str | None = None,
+) -> SimpleNamespace:
+    """Фрагмент tool call в потоковой дельте OpenAI."""
+    return SimpleNamespace(
+        index=index,
+        id=id,
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+
+
+def _tool_chunk(
+    deltas: list[SimpleNamespace],
+    finish_reason: str | None = None,
+    model: str = "gpt-4o-mini",
+) -> SimpleNamespace:
+    """Чанк потока с delta.tool_calls (без текстового контента)."""
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=deltas),
+                finish_reason=finish_reason,
+            )
+        ],
+        model=model,
+    )
+
+
 def test_openai_complete_maps_request(fake_client: FakeClient) -> None:
     provider = OpenAIProvider(api_key="test-key")
     fake_client.chat.completions.set_result(_completion())
@@ -393,3 +425,106 @@ def test_registry_get_openai_with_base_url(fake_client: FakeClient) -> None:
     assert isinstance(provider, OpenAIProvider)
     assert fake_client.api_key == "test-key"
     assert fake_client.base_url == "http://localhost:1234/v1"
+
+
+def test_openai_stream_sends_tools(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result([])
+
+    list(provider.stream(_request(tools=[Tool(name="get_weather", description="Погода")])))
+
+    assert fake_client.chat.completions.calls[-1]["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "description": "Погода"}}
+    ]
+
+
+def test_openai_stream_aggregates_tool_call_fragments(fake_client: FakeClient) -> None:
+    """id/имя приходят в первом фрагменте, JSON-аргументы — накоплением."""
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        [
+            _tool_chunk([_tool_delta(0, id="call_1", name="get_weather", arguments="")]),
+            _tool_chunk([_tool_delta(0, arguments='{"city"')]),
+            _tool_chunk([_tool_delta(0, arguments=': "Moscow"}')]),
+            _chunk(delta="", finish_reason="tool_calls"),
+        ]
+    )
+
+    chunks = list(provider.stream(_request()))
+
+    assert len(chunks) == 1
+    assert chunks[0].delta == ""
+    assert chunks[0].finish_reason == "tool_calls"
+    assert chunks[0].tool_calls == [
+        ToolCall(id="call_1", name="get_weather", arguments='{"city": "Moscow"}')
+    ]
+
+
+def test_openai_stream_groups_parallel_tool_calls_by_index(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        [
+            _tool_chunk(
+                [
+                    _tool_delta(0, id="call_1", name="get_weather", arguments=""),
+                    _tool_delta(1, id="call_2", name="get_time", arguments=""),
+                ]
+            ),
+            _tool_chunk([_tool_delta(0, arguments='{"city": "Moscow"}')]),
+            _tool_chunk([_tool_delta(1, arguments="{}")]),
+            _chunk(delta="", finish_reason="tool_calls"),
+        ]
+    )
+
+    chunks = list(provider.stream(_request()))
+
+    assert chunks[-1].tool_calls == [
+        ToolCall(id="call_1", name="get_weather", arguments='{"city": "Moscow"}'),
+        ToolCall(id="call_2", name="get_time", arguments="{}"),
+    ]
+
+
+def test_openai_stream_tool_call_without_arguments_defaults_to_empty_object(
+    fake_client: FakeClient,
+) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        [
+            _tool_chunk([_tool_delta(0, id="call_1", name="get_time", arguments="")]),
+            _chunk(delta="", finish_reason="tool_calls"),
+        ]
+    )
+
+    chunks = list(provider.stream(_request()))
+
+    assert chunks[0].tool_calls == [ToolCall(id="call_1", name="get_time", arguments="{}")]
+
+
+def test_openai_stream_emits_tool_calls_without_finish_reason(fake_client: FakeClient) -> None:
+    """Совместимые API могут завершить поток без finish_reason — вызовы не теряем."""
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        [_tool_chunk([_tool_delta(0, id="call_1", name="get_time", arguments="")])]
+    )
+
+    chunks = list(provider.stream(_request()))
+
+    assert len(chunks) == 1
+    assert chunks[0].finish_reason is None
+    assert chunks[0].tool_calls == [ToolCall(id="call_1", name="get_time", arguments="{}")]
+
+
+def test_openai_stream_keeps_text_preamble_before_tool_calls(fake_client: FakeClient) -> None:
+    provider = OpenAIProvider(api_key="test-key")
+    fake_client.chat.completions.set_result(
+        [
+            _chunk(delta="Сейчас посмотрю. "),
+            _tool_chunk([_tool_delta(0, id="call_1", name="get_weather", arguments="{}")]),
+            _chunk(delta="", finish_reason="tool_calls"),
+        ]
+    )
+
+    chunks = list(provider.stream(_request()))
+
+    assert "".join(c.delta for c in chunks) == "Сейчас посмотрю. "
+    assert chunks[-1].tool_calls == [ToolCall(id="call_1", name="get_weather", arguments="{}")]
