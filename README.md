@@ -146,6 +146,9 @@ print([m.content for m in restored.messages])
 - `memory` и `session_id` задаются **вместе**: без `session_id` диалог некуда
   сохранять. `FileMemory` хранит каждую сессию в отдельном JSONL-файле
   `<directory>/<session_id>.json`.
+- `session_id` — переносимый идентификатор: латинские буквы, цифры, `_`, `-`
+  и `.` (точка — не первым и не последним символом), до 128 символов.
+  Непригодный id отклоняется с `InvalidSessionIdError`.
 - При создании агент загружает историю сессии и продолжает диалог с неё.
   В хранилище пишется только «разговорная» часть (user/assistant/tool) —
   system-промпт остаётся конфигурацией агента и ставится первым при создании.
@@ -160,7 +163,9 @@ print([m.content for m in restored.messages])
 
 Своё хранилище (Redis, Postgres, SQLite...) подключить просто: реализуйте
 `Memory` — `load_session`/`save_session`/`search`/`delete_session` — и передайте
-в `Agent`. Полный исполняемый пример — [`examples/memory.py`](examples/memory.py).
+в `Agent`. Если у хранилища ограничения на символы в id, проверяйте его через
+`validate_session_id` и бросайте `InvalidSessionIdError`.
+Полный исполняемый пример — [`examples/memory.py`](examples/memory.py).
 
 ### Инструменты (tool calling)
 
